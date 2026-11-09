@@ -1,0 +1,4 @@
+node_modules/
+user-data/
+profile.json
+npm-debug.log*
