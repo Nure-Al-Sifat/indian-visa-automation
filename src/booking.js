@@ -3,14 +3,11 @@ import path from "node:path";
 import { getPortalIssues, getPortalStep } from "./assistant.js";
 
 const FILE_INPUT_SELECTOR = 'input[type="file"]';
+const lastVisibleIssuesByPage = new WeakMap();
 
 async function askYesNo(prompts, message) {
   const answer = (await prompts.question(`${message} [y/N]: `)).trim().toLowerCase();
   return answer === "y" || answer === "yes";
-}
-
-async function waitForManualStep(prompts, message) {
-  await prompts.question(`${message}\nComplete it in the browser, then press Enter here. `);
 }
 
 async function findUniqueControl(page, roles, exactNames) {
@@ -32,6 +29,211 @@ async function findUniqueControl(page, roles, exactNames) {
   return { found: false, ambiguous: false };
 }
 
+async function clickPortalControl(page, locator, options = {}) {
+  if (!await waitForPortalNoticesClosed(page)) {
+    return false;
+  }
+  await locator.click(options);
+  return true;
+}
+
+async function waitForAnyState(candidates, timeout = 15_000) {
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  const waits = candidates.map(({ locator, state = "visible" }) =>
+    locator.waitFor({ state, timeout }).then(() => true),
+  );
+  try {
+    return await Promise.any(waits);
+  } catch {
+    return false;
+  }
+}
+
+function getPortalNoticeLocators(page) {
+  return [
+    page.getByText("Important Notice", { exact: true }),
+    page.getByText(/Mandatory Submission of Visa Undertaking Form/i),
+    page.getByText(/Advisory on Fraudulent Visa Appointment Slot Offers/i),
+  ];
+}
+
+async function hasVisiblePortalNotice(page) {
+  for (const locator of getPortalNoticeLocators(page)) {
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      if (await locator.nth(index).isVisible().catch(() => false)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function waitForPortalNoticesClosed(page) {
+  let lastCloseAttempt = 0;
+  let lastNoticeMessage = 0;
+  while (!page.isClosed()) {
+    if (!await hasVisiblePortalNotice(page)) {
+      return true;
+    }
+    const now = Date.now();
+    if (now - lastCloseAttempt >= 1_000) {
+      await dismissPortalNotices(page);
+      lastCloseAttempt = Date.now();
+    }
+    if (now - lastNoticeMessage >= 10_000) {
+      console.log("A portal notice is blocking the next action. Close it with its X button; the helper is waiting.");
+      lastNoticeMessage = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return false;
+}
+
+async function waitForPortalStep(page, label, candidates) {
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return false;
+    }
+    if (await waitForAnyState(candidates, 150)) {
+      console.log(`Portal step ready: ${label}.`);
+      return true;
+    }
+
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(`Still waiting for the portal to show: ${label}.`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return false;
+}
+
+async function waitForEnabledPortalStep(page, label, locators) {
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return false;
+    }
+    if (await waitForAnyEnabled(page, locators, 150)) {
+      console.log(`Portal step ready: ${label}.`);
+      return true;
+    }
+
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(`Still waiting for the portal to show: ${label}.`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return false;
+}
+
+async function waitForUniqueControlUntilReady(page, roles, exactNames, label) {
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return { found: false, ambiguous: false };
+    }
+    const result = await findUniqueControl(page, roles, exactNames);
+    if (result.found || result.ambiguous) {
+      return result;
+    }
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(`Still waiting for an enabled ${label} control.`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return { found: false, ambiguous: false };
+}
+
+async function waitForAnyEnabled(page, locators, timeout = 15_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const locator of locators) {
+      const count = await locator.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const candidate = locator.nth(index);
+        if (
+          await candidate.isVisible().catch(() => false) &&
+          await candidate.isEnabled().catch(() => false)
+        ) {
+          return true;
+        }
+      }
+    }
+    await page.waitForTimeout(200);
+  }
+  return false;
+}
+
+async function waitForBookingStart(page) {
+  return waitForPortalStep(page, "sign-in or booking page", [
+    ...page.frames().map((frame) => ({
+      locator: frame.locator('input[type="password"]'),
+      state: "visible",
+    })),
+    { locator: page.getByRole("button", { name: "Next Step", exact: true }) },
+    { locator: page.getByRole("link", { name: "Next Step", exact: true }) },
+    { locator: page.getByRole("button", { name: /book your appointment|book appointment/i }) },
+    { locator: page.getByRole("link", { name: /book your appointment|book appointment/i }) },
+    { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+  ]);
+}
+
+async function isWebfileStepReady(page) {
+  if (!await waitForPortalNoticesClosed(page)) {
+    return false;
+  }
+  return waitForAnyState([
+    { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    { locator: page.getByText(/upload primary applicant(?:'s|’s) webfile/i) },
+  ], 100);
+}
+
+async function isActiveBookingStepReady(page) {
+  if (!await waitForPortalNoticesClosed(page)) {
+    return false;
+  }
+  return waitForAnyState([
+    { locator: page.getByRole("button", { name: "Next Step", exact: true }) },
+    { locator: page.getByRole("link", { name: "Next Step", exact: true }) },
+    { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    { locator: page.getByLabel(/select ivac cent(?:re|er)/i) },
+    { locator: page.locator('input[type="date"]'), state: "visible" },
+    { locator: page.getByRole("button", { name: /pay now/i }) },
+    { locator: page.getByRole("heading", { name: /payment details|payment gateway/i }) },
+    { locator: page.getByText(/appointment (?:is )?confirmed|booking (?:is )?confirmed/i) },
+  ], 100);
+}
+
+async function isPaymentStepReady(page) {
+  if (!await waitForPortalNoticesClosed(page)) {
+    return false;
+  }
+  return waitForAnyState([
+    { locator: page.getByRole("button", { name: /pay now/i }) },
+    { locator: page.getByRole("heading", { name: /payment details|payment gateway/i }) },
+  ], 100);
+}
+
+async function waitForFileInputCount(page, expectedCount) {
+  return waitForPortalStep(page, `Webfile input ${expectedCount}`, [
+    { locator: page.locator(FILE_INPUT_SELECTOR).nth(expectedCount - 1), state: "attached" },
+  ]);
+}
+
 export async function dismissPortalNotices(page) {
   const noticeTitles = [
     { label: "Important Notice", locator: page.getByText("Important Notice", { exact: true }) },
@@ -43,8 +245,15 @@ export async function dismissPortalNotices(page) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     let activeNotice = null;
     for (const notice of noticeTitles) {
-      if (await notice.locator.count() === 1 && await notice.locator.isVisible().catch(() => false)) {
-        activeNotice = notice;
+      const count = await notice.locator.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const candidate = notice.locator.nth(index);
+        if (await candidate.isVisible().catch(() => false)) {
+          activeNotice = { ...notice, locator: candidate };
+          break;
+        }
+      }
+      if (activeNotice) {
         break;
       }
     }
@@ -270,8 +479,12 @@ async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
       "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
     ]);
     if (addApplicant.found) {
-      await addApplicant.locator.click({ timeout: 5_000 });
-      await page.waitForTimeout(400);
+      const previousInputCount = await inputLocator.count();
+      if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return null;
+      if (!await waitForFileInputCount(page, previousInputCount + 1)) {
+        console.log("Add Applicant was clicked, but a new Webfile input did not appear. Guided booking stopped.");
+        return null;
+      }
       details = await getFileInputDetails(page);
       candidates = availableInputs();
       labelledCandidates = candidates.filter(matchesApplicant);
@@ -283,13 +496,42 @@ async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
 
   if (candidates.length === 0) {
     const label = isPrimary ? "Primary Applicant's Webfile" : `Secondary Applicant ${applicantNumber}'s Webfile`;
-    console.log(`No separate empty file input was found for ${label}. The helper will not replace a previously selected applicant file.`);
-    await waitForManualStep(prompts, `Open a separate ${label} input in the browser.`);
-    details = await getFileInputDetails(page);
-    candidates = availableInputs();
-    labelledCandidates = candidates.filter(matchesApplicant);
-    if (labelledCandidates.length === 1) {
-      return { locator: inputLocator.nth(labelledCandidates[0].index - 1), identity: labelledCandidates[0].identity };
+    console.log(`Waiting for an empty ${label} file input. The helper will not replace a previously selected applicant file.`);
+    let lastHeartbeat = 0;
+    let addAttempted = false;
+    while (!page.isClosed()) {
+      if (!await waitForPortalNoticesClosed(page)) {
+        return null;
+      }
+      details = await getFileInputDetails(page);
+      candidates = availableInputs();
+      labelledCandidates = candidates.filter(matchesApplicant);
+      if (labelledCandidates.length === 1 || candidates.length > 0) {
+        break;
+      }
+      if (!isPrimary && !addAttempted) {
+        const addApplicant = await findUniqueControl(page, ["button", "link"], [
+          "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
+        ]);
+        if (addApplicant.found) {
+          addAttempted = true;
+          const previousInputCount = await inputLocator.count();
+          if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return null;
+          if (!await waitForFileInputCount(page, previousInputCount + 1)) {
+            return null;
+          }
+          continue;
+        }
+      }
+      const now = Date.now();
+      if (now - lastHeartbeat >= 30_000) {
+        console.log(`Still waiting for an empty file input for ${label}.`);
+        lastHeartbeat = now;
+      }
+      await page.waitForTimeout(300).catch(() => {});
+    }
+    if (page.isClosed()) {
+      return null;
     }
   }
 
@@ -308,6 +550,14 @@ async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
   }
   console.log(`No safe file input was identified for applicant ${applicantNumber}.`);
   return null;
+}
+
+async function waitForDateStep(page) {
+  return waitForEnabledPortalStep(page, "appointment-date selection", [
+    page.locator('input[type="date"]'),
+    page.getByLabel(/appointment date/i),
+    page.locator('[role="grid"] button'),
+  ]);
 }
 
 async function chooseCentre(page, prompts) {
@@ -344,14 +594,29 @@ async function chooseCentre(page, prompts) {
         }
         selected = options[answer - 1];
       }
+      if (!await waitForPortalNoticesClosed(page)) {
+        return null;
+      }
       await select.selectOption({ value: selected.value });
+      if (await select.inputValue() !== selected.value) {
+        console.log("The IVAC Centre selection did not remain selected. Guided booking stopped before date selection.");
+        return null;
+      }
       console.log(`IVAC Centre selected: ${selected.label}`);
+      if (!await waitForDateStep(page)) {
+        console.log("The centre was selected, but the appointment-date step did not appear. Guided booking stopped for review.");
+        return null;
+      }
       return selected.label;
     }
   }
 
   console.log("Could not safely identify one IVAC Centre selector. Select the centre in the browser yourself.");
-  await waitForManualStep(prompts, "Select the preferred eligible IVAC Centre.");
+  console.log("Select the preferred eligible IVAC Centre in the browser; waiting for the date selector to appear.");
+  if (!await waitForDateStep(page)) {
+    console.log("The appointment-date step did not appear after centre selection. Guided booking stopped for review.");
+    return null;
+  }
   return (await prompts.question("Enter the selected centre name for the final review: ")).trim() || "Centre selected in browser";
 }
 
@@ -360,6 +625,10 @@ function escapeRegex(value) {
 }
 
 async function chooseDate(page, prompts) {
+  const waitForSubmitStep = () => waitForPortalStep(page, "consent or appointment-submit step", [
+    { locator: page.locator('input[type="checkbox"]'), state: "visible" },
+    { locator: page.getByRole("button", { name: /submit|confirm appointment|proceed to payment|continue/i }) },
+  ]);
   let date;
   while (true) {
     date = (await prompts.question("Preferred available date (YYYY-MM-DD): ")).trim();
@@ -373,12 +642,30 @@ async function chooseDate(page, prompts) {
   const dateInputs = page.locator('input[type="date"]');
   const dateInputCount = await dateInputs.count();
   if (dateInputCount === 1) {
+    if (!await waitForPortalNoticesClosed(page)) return null;
     await dateInputs.fill(date);
+    if (await dateInputs.inputValue() !== date) {
+      console.log("The appointment date field did not retain the selected date. Guided booking stopped.");
+      return null;
+    }
+    if (!await waitForSubmitStep()) {
+      console.log("The consent/submit step did not appear after selecting the date. Guided booking stopped for review.");
+      return null;
+    }
     return date;
   }
   const labeledDateInput = page.getByLabel(/appointment date/i);
   if (await labeledDateInput.count() === 1) {
+    if (!await waitForPortalNoticesClosed(page)) return null;
     await labeledDateInput.fill(date);
+    if (await labeledDateInput.inputValue() !== date) {
+      console.log("The appointment date field did not retain the selected date. Guided booking stopped.");
+      return null;
+    }
+    if (!await waitForSubmitStep()) {
+      console.log("The consent/submit step did not appear after selecting the date. Guided booking stopped for review.");
+      return null;
+    }
     return date;
   }
 
@@ -386,7 +673,11 @@ async function chooseDate(page, prompts) {
   const isoLocator = page.locator(`[data-date="${date}"], [data-value="${date}"]`);
   const isoCount = await isoLocator.count();
   if (isoCount === 1 && await isoLocator.isVisible() && await isoLocator.isEnabled()) {
-    await isoLocator.click();
+    if (!await clickPortalControl(page, isoLocator)) return null;
+    if (!await waitForSubmitStep()) {
+      console.log("The consent/submit step did not appear after selecting the date. Guided booking stopped for review.");
+      return null;
+    }
     return date;
   }
 
@@ -397,7 +688,11 @@ async function chooseDate(page, prompts) {
   const dateButtons = page.getByRole("button", { name: datePattern });
   const dateButtonCount = await dateButtons.count();
   if (dateButtonCount === 1 && await dateButtons.isEnabled()) {
-    await dateButtons.click();
+    if (!await clickPortalControl(page, dateButtons)) return null;
+    if (!await waitForSubmitStep()) {
+      console.log("The consent/submit step did not appear after selecting the date. Guided booking stopped for review.");
+      return null;
+  }
     return date;
   }
 
@@ -406,13 +701,21 @@ async function chooseDate(page, prompts) {
   if (monthYear.test(pageText)) {
     const dayButton = page.getByRole("button", { name: dayNumber, exact: true });
     if (await dayButton.count() === 1 && await dayButton.isEnabled()) {
-      await dayButton.click();
+      if (!await clickPortalControl(page, dayButton)) return null;
+      if (!await waitForSubmitStep()) {
+        console.log("The consent/submit step did not appear after selecting the date. Guided booking stopped for review.");
+        return null;
+      }
       return date;
     }
   }
 
   console.log(`Could not uniquely identify ${date} in the calendar. Select that date in the browser yourself.`);
-  await waitForManualStep(prompts, `Select ${date} in the appointment calendar. Ensure the date is available and in the future.`);
+  console.log(`Waiting for ${date} to be selected and the next appointment step to appear.`);
+  if (!await waitForSubmitStep()) {
+    console.log("The date was not followed by the consent/submit step. Guided booking stopped for review.");
+    return null;
+  }
   return date;
 }
 
@@ -436,31 +739,83 @@ async function completeConsentIfNeeded(page, prompts) {
     console.log("Consent was not selected. Guided booking stopped.");
     return false;
   }
+  if (!await waitForPortalNoticesClosed(page)) return false;
   await checkbox.check();
+  if (!await checkbox.isChecked()) {
+    console.log("The consent checkbox did not remain selected. Guided booking stopped before submission.");
+    return false;
+  }
   return true;
 }
 
-async function waitForCaptchaIfNeeded(page, prompts) {
+async function waitForCaptchaIfNeeded(page) {
   const captcha = page.locator('iframe[title*="captcha" i], iframe[src*="captcha" i], .g-recaptcha, [data-sitekey]');
   if (await captcha.count() === 0) {
     return true;
   }
-  await waitForManualStep(prompts, "Complete the CAPTCHA directly in the browser. The helper will not solve it.");
-  return true;
+  console.log("Complete the CAPTCHA directly in the browser. Waiting for the portal to register it; the helper will not solve it.");
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return false;
+    }
+    const solved = await page.locator('textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')
+      .evaluateAll((elements) => elements.some((element) => Boolean(element.value?.trim())))
+      .catch(() => false);
+    if (solved) {
+      console.log("The portal has registered the CAPTCHA response.");
+      return true;
+    }
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log("Still waiting for the CAPTCHA response to be registered by the portal.");
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return false;
 }
 
 async function reportVisibleIssues(page) {
   const pageText = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
   const issues = getPortalIssues(pageText);
+  const previousIssues = lastVisibleIssuesByPage.get(page) || new Set();
+  const currentIssueKeys = new Set(issues.map(({ key }) => key));
   for (const issue of issues) {
-    console.warn(`Portal issue: ${issue.label}. ${issue.guidance}`);
+    if (!previousIssues.has(issue.key)) {
+      console.warn(`Portal issue: ${issue.label}. ${issue.guidance}`);
+    }
   }
+  lastVisibleIssuesByPage.set(page, currentIssueKeys);
   return { pageText, issues, step: getPortalStep(pageText) };
 }
 
 function getApplicantCount(pageText) {
   const match = pageText.match(/total number of applicants\s*:\s*(\d+)/i);
   return match ? Number(match[1]) : null;
+}
+
+async function waitForApplicantCount(page, expectedCount) {
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return null;
+    }
+    const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    const count = getApplicantCount(pageText);
+    if (count !== null && count >= expectedCount) {
+      return count;
+    }
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(`Waiting for the portal to confirm Webfile ${expectedCount} of ${expectedCount}.`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return null;
 }
 
 async function uploadApplicantPdfs(page, prompts, applicants) {
@@ -474,63 +829,51 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
       return false;
     }
 
+    if (!await waitForPortalNoticesClosed(page)) return false;
     await fileInput.locator.setInputFiles(applicant.path);
     usedInputs.add(fileInput.identity);
 
-    const uploadAction = await findUniqueControl(page, ["button"], ["Upload Webfile", "Upload"]);
-    if (uploadAction.found) {
-      await uploadAction.locator.click({ timeout: 5_000 });
+    const uploadControls = ["Upload Webfile", "Upload"].map((name) => page.getByRole("button", { name, exact: true }));
+    let uploadControlExists = false;
+    for (const locator of uploadControls) {
+      if (await locator.count().catch(() => 0) > 0) {
+        uploadControlExists = true;
+        break;
+      }
+    }
+    if (uploadControlExists) {
+      const uploadAction = await waitForUniqueControlUntilReady(
+        page,
+        ["button"],
+        ["Upload Webfile", "Upload"],
+        `Upload Webfile for ${applicant.label}`,
+      );
+      if (!uploadAction.found) {
+        console.log("The upload action is ambiguous. The helper stopped before submitting a Webfile.");
+        return false;
+      }
+      if (!await clickPortalControl(page, uploadAction.locator, { timeout: 5_000 })) return false;
     }
 
-    await page.waitForTimeout(800);
     let report = await reportVisibleIssues(page);
     if (report.issues.length > 0) {
       console.log(`Resolve the portal message for ${applicant.label} before continuing.`);
       return false;
     }
 
-    let acceptedCount = getApplicantCount(report.pageText);
-    if (acceptedCount !== null && acceptedCount > applicantNumber) {
-      console.log(`The portal shows ${acceptedCount} applicants after selecting applicant ${applicantNumber}. This does not match the prepared upload order, so guided booking stopped.`);
+    const acceptedCount = await waitForApplicantCount(page, applicantNumber);
+    report = await reportVisibleIssues(page);
+    if (report.issues.length > 0) {
+      console.log(`Resolve the portal message for ${applicant.label} before continuing.`);
       return false;
     }
-    if (acceptedCount !== null && acceptedCount < applicantNumber) {
-      await page.waitForFunction((expectedCount) => {
-        const text = document.body?.innerText || "";
-        const match = text.match(/total number of applicants\s*:\s*(\d+)/i);
-        return match && Number(match[1]) >= expectedCount;
-      }, applicantNumber, { timeout: 8_000 }).catch(() => {});
-      report = await reportVisibleIssues(page);
-      if (report.issues.length > 0) {
-        console.log(`Resolve the portal message for ${applicant.label} before continuing.`);
-        return false;
-      }
-      acceptedCount = getApplicantCount(report.pageText);
-      if (acceptedCount === null || acceptedCount < applicantNumber) {
-        const countDescription = acceptedCount === null ? "an unrecognized applicant count" : `${acceptedCount} applicant(s)`;
-        const continueAfterReview = await askYesNo(
-          prompts,
-          `The portal currently shows ${countDescription} after selecting ${applicant.label}. Has the portal visibly accepted this Webfile? If not, stop and resolve the upload message in the browser.`,
-        );
-        if (!continueAfterReview) {
-          console.log(`Stopped before selecting the next applicant's Webfile.`);
-          return false;
-        }
-        report = await reportVisibleIssues(page);
-        if (report.issues.length > 0) {
-          console.log(`Resolve the portal message for ${applicant.label} before continuing.`);
-          return false;
-        }
-        acceptedCount = getApplicantCount(report.pageText);
-        if (acceptedCount !== null && acceptedCount < applicantNumber) {
-          console.log(`The portal still shows ${acceptedCount} applicant(s). The ${applicant.label} Webfile was not confirmed, so guided booking stopped.`);
-          return false;
-        }
-      }
-      if (acceptedCount !== null && acceptedCount !== applicantNumber) {
-        console.log(`The portal now shows ${acceptedCount} applicants, which does not match applicant ${applicantNumber}. Guided booking stopped.`);
-        return false;
-      }
+    if (acceptedCount === null) {
+      console.log(`The browser closed before the portal confirmed ${applicant.label}. The next applicant was not started.`);
+      return false;
+    }
+    if (acceptedCount !== applicantNumber) {
+      console.log(`The portal shows ${acceptedCount} applicant(s), which does not match applicant ${applicantNumber}. The next applicant was not started.`);
+      return false;
     }
 
     if (index + 1 < applicants.length) {
@@ -538,8 +881,12 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
         "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
       ]);
       if (addApplicant.found && (await getFileInputDetails(page)).length <= applicantNumber) {
-        await addApplicant.locator.click({ timeout: 5_000 });
-        await page.waitForTimeout(400);
+        const previousInputCount = await page.locator(FILE_INPUT_SELECTOR).count();
+        if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return false;
+        if (!await waitForFileInputCount(page, previousInputCount + 1)) {
+          console.log("Add Applicant was clicked, but the next Webfile input did not appear. Guided booking stopped.");
+          return false;
+        }
       }
     }
   }
@@ -558,7 +905,12 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     return false;
   }
 
-  const confirmButton = await findUniqueControl(page, ["button"], ["Confirm All Information is Correct"]);
+  const confirmButton = await waitForUniqueControlUntilReady(
+    page,
+    ["button"],
+    ["Confirm All Information is Correct"],
+    "applicant confirmation",
+  );
   if (!confirmButton.found) {
     console.log("Could not uniquely identify the applicant confirmation button. Review the page and confirm manually.");
     return false;
@@ -570,119 +922,237 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     console.log("Applicant Webfile confirmation cancelled.");
     return false;
   }
-  await confirmButton.locator.click({ timeout: 5_000 });
-  await page.waitForTimeout(800);
-  await dismissPortalNotices(page);
+  if (!await clickPortalControl(page, confirmButton.locator, { timeout: 5_000 })) return false;
+  const bookingStepReady = await waitForPortalStep(page, "IVAC Centre/date selection", [
+    { locator: page.getByText(/select ivac cent(?:re|er)/i) },
+    { locator: page.locator("select"), state: "visible" },
+    { locator: page.locator('input[type="date"]'), state: "visible" },
+    { locator: page.getByText(/appointment calendar|select appointment date/i) },
+  ]);
+  if (!bookingStepReady) {
+    console.log("Applicant confirmation was clicked, but the centre/date step did not appear. Guided booking stopped for review.");
+    return false;
+  }
   return true;
 }
 
 async function clickNextStepIfPresent(page) {
-  const nextStep = await findUniqueControl(page, ["button", "link"], ["Next Step"]);
+  if (await isWebfileStepReady(page)) {
+    return true;
+  }
+  const nextStep = await waitForUniqueControlUntilReady(
+    page,
+    ["button", "link"],
+    ["Next Step"],
+    "Next Step",
+  );
   if (!nextStep.found) {
     return false;
   }
-  await nextStep.locator.click({ timeout: 5_000 });
-  await page.waitForTimeout(800);
-  await dismissPortalNotices(page);
+  if (!await clickPortalControl(page, nextStep.locator, { timeout: 5_000 })) return false;
+  const uploadStepReady = await waitForPortalStep(page, "Webfile upload", [
+    { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    { locator: page.getByText(/upload primary applicant(?:'s|’s) webfile/i) },
+  ]);
+  if (!uploadStepReady) {
+    console.log("Next Step was clicked, but the Webfile upload step did not appear. Guided booking stopped for review.");
+    return false;
+  }
   console.log("Clicked Next Step to open the applicant Webfile upload page.");
   return true;
 }
 
-async function findUniqueLoginField(page, candidates) {
-  for (const locator of candidates) {
-    const count = await locator.count();
-    if (count === 0) {
-      continue;
-    }
-    if (count !== 1) {
-      return null;
-    }
-    if (
-      !await locator.isVisible().catch(() => false) ||
-      !await locator.isEnabled().catch(() => false)
-    ) {
-      return null;
-    }
-    return locator;
+function loginInputMetadata(inputs) {
+  return inputs.map((element, index) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const label = Array.from(element.labels || [])
+      .map((item) => item.innerText || item.textContent || "")
+      .join(" ");
+    return {
+      index,
+      type: (element.getAttribute("type") || "text").toLowerCase(),
+      hint: [
+        label,
+        element.getAttribute("aria-label") || "",
+        element.getAttribute("placeholder") || "",
+        element.getAttribute("name") || "",
+        element.id || "",
+        element.getAttribute("autocomplete") || "",
+      ].join(" ").replace(/\s+/g, " ").trim().toLowerCase(),
+      visible: rect.width > 0 && rect.height > 0 &&
+        style.visibility !== "hidden" && style.display !== "none",
+      disabled: element.disabled,
+      readOnly: element.readOnly,
+    };
+  });
+}
+
+function loginButtonMetadata(controls) {
+  return controls.map((element, index) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return {
+      index,
+      name: [
+        element.innerText || element.textContent || "",
+        element.getAttribute("aria-label") || "",
+        element.getAttribute("value") || "",
+      ].join(" ").replace(/\s+/g, " ").trim(),
+      type: (element.getAttribute("type") || "").toLowerCase(),
+      visible: rect.width > 0 && rect.height > 0 &&
+        style.visibility !== "hidden" && style.display !== "none",
+      disabled: Boolean(element.disabled),
+    };
+  });
+}
+
+async function typeIntoLoginField(page, locator, value) {
+  if (!await waitForPortalNoticesClosed(page)) {
+    return false;
   }
-  return null;
+  await locator.click({ timeout: 5_000 });
+  await locator.press("Control+A", { timeout: 5_000 });
+  await locator.press("Backspace", { timeout: 5_000 });
+  await locator.pressSequentially(value, { delay: 40, timeout: 15_000 });
+  return await locator.inputValue() === value;
 }
 
 async function fillAndSubmitLogin(page, credentials) {
-  const contactField = await findUniqueLoginField(page, [
-    page.getByLabel(/contact number|mobile number|phone number|login id|user id/i),
-    page.getByPlaceholder(/contact number|mobile number|phone number|login id|user id/i),
-    page.locator('input[type="tel"]'),
-  ]);
-  const passwordField = await findUniqueLoginField(page, [
-    page.locator('input[type="password"]'),
-    page.getByLabel(/password/i),
-  ]);
-  const signIn = await findUniqueControl(
-    page,
-    ["button"],
-    ["Sign In Now", "Sign In", "Login", "Log In"],
-  );
-
-  if (!contactField || !passwordField || !signIn.found) {
-    console.warn("Could not safely identify one contact field, password field, and Sign In button. Complete sign-in in the browser.");
-    return false;
+  if (!await waitForPortalNoticesClosed(page)) {
+    return { fieldsFilled: false, submitted: false };
   }
+  for (const frame of page.frames()) {
+    const inputs = await frame.locator("input").evaluateAll(loginInputMetadata).catch(() => []);
+    const available = inputs.filter((input) => input.visible && !input.disabled && !input.readOnly);
+    const passwordMatches = available.filter((input) => input.type === "password");
+    if (passwordMatches.length !== 1) {
+      continue;
+    }
 
-  const [contactInfo, passwordInfo] = await Promise.all([
-    contactField.evaluate((element) => ({
-      tag: element.tagName.toLowerCase(),
-      type: (element.getAttribute("type") || "text").toLowerCase(),
-      disabled: element.disabled,
-      readOnly: element.readOnly,
-    })),
-    passwordField.evaluate((element) => ({
-      tag: element.tagName.toLowerCase(),
-      type: (element.getAttribute("type") || "text").toLowerCase(),
-      disabled: element.disabled,
-      readOnly: element.readOnly,
-    })),
-  ]);
-  if (
-    contactInfo.tag !== "input" ||
-    !["tel", "text"].includes(contactInfo.type) ||
-    contactInfo.disabled ||
-    contactInfo.readOnly ||
-    passwordInfo.tag !== "input" ||
-    passwordInfo.type !== "password" ||
-    passwordInfo.disabled ||
-    passwordInfo.readOnly
-  ) {
-    console.warn("The sign-in fields did not match the expected contact-number and password inputs. Complete sign-in in the browser.");
-    return false;
-  }
-
-  try {
-    for (const [field, value] of [
-      [contactField, credentials.contactNumber],
-      [passwordField, credentials.password],
-    ]) {
-      await field.click({ timeout: 5_000 });
-      await field.press("Control+A", { timeout: 5_000 });
-      await field.press("Backspace", { timeout: 5_000 });
-      await field.pressSequentially(value, { delay: 45, timeout: 10_000 });
-      if (await field.inputValue() !== value) {
-        console.warn("The browser did not accept typed text in a sign-in field. Sign In was not clicked.");
-        return false;
+    const textInputs = available.filter((input) =>
+      ["text", "tel", "number", "email"].includes(input.type),
+    );
+    const contactHints = textInputs.filter((input) =>
+      /contact|mobile|phone|login\s*(?:id|name)?|user\s*(?:id|name)?|username/.test(input.hint),
+    );
+    let contactMatch = null;
+    if (contactHints.length === 1) {
+      contactMatch = contactHints[0];
+    } else if (contactHints.length > 1) {
+      continue;
+    } else {
+      const telInputs = textInputs.filter((input) => input.type === "tel");
+      if (telInputs.length === 1) {
+        contactMatch = telInputs[0];
+      } else if (textInputs.length === 1) {
+        contactMatch = textInputs[0];
+      } else {
+        continue;
       }
     }
 
-    await signIn.locator.click({ timeout: 5_000 });
-    console.log("Typed the sign-in credentials from credentials.json and clicked Sign In. Complete CAPTCHA/OTP in the browser if prompted.");
-    await page.waitForTimeout(1_200);
-    await dismissPortalNotices(page);
-    return true;
-  } catch (error) {
-    console.warn("Automatic sign-in could not complete: " + error.message);
-    return false;
-  }
-}
+    const contactField = frame.locator("input").nth(contactMatch.index);
+    const passwordField = frame.locator("input").nth(passwordMatches[0].index);
+    const containingForms = frame.locator("form").filter({ has: passwordField });
+    const formCount = await containingForms.count().catch(() => 0);
+    const scope = formCount === 1 ? containingForms : frame;
+    const buttons = await scope.locator('button, [role="button"], input[type="submit"]')
+      .evaluateAll(loginButtonMetadata).catch(() => []);
+    const visibleButtons = buttons.filter((button) => button.visible);
+    const namedButtons = visibleButtons.filter((button) =>
+      /sign\s*in|log\s*in|login/i.test(button.name),
+    );
+    let submitIndex = null;
+    if (namedButtons.length === 1) {
+      submitIndex = namedButtons[0].index;
+    } else if (namedButtons.length === 0 && formCount === 1) {
+      const submitButtons = visibleButtons.filter((button) => button.type === "submit");
+      if (submitButtons.length === 1) {
+        submitIndex = submitButtons[0].index;
+      }
+    }
+    if (submitIndex === null) {
+      continue;
+    }
 
+    const submitButton = scope.locator('button, [role="button"], input[type="submit"]').nth(submitIndex);
+    try {
+      if (!await typeIntoLoginField(page, contactField, credentials.contactNumber)) {
+        console.warn("The contact-number field did not retain the typed value. Sign In was not clicked.");
+        return { fieldsFilled: false, submitted: false };
+      }
+      if (!await typeIntoLoginField(page, passwordField, credentials.password)) {
+        console.warn("The password field did not retain the typed value. Sign In was not clicked.");
+        return { fieldsFilled: false, submitted: false };
+      }
+
+      console.log("Typed the contact number and password into the visible sign-in fields.");
+      let enabled = await submitButton.isEnabled().catch(() => false);
+      let lastHeartbeat = 0;
+      if (!enabled) {
+        console.log("Credentials are filled. Complete Cloudflare/CAPTCHA in the browser; the helper is waiting for Sign In to become available.");
+        while (!page.isClosed()) {
+          if (!await waitForPortalNoticesClosed(page)) {
+            return { fieldsFilled: false, submitted: false };
+          }
+          const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+          if (await isOtpPageVisible(page, pageText) ||
+            (!await isAuthenticationPageVisible(page, pageText) && await isBookingSurfaceReady(page))) {
+            return { fieldsFilled: true, submitted: true };
+          }
+          await page.waitForTimeout(300);
+          enabled = await submitButton.isEnabled().catch(() => false);
+          if (enabled) {
+            break;
+          }
+          const now = Date.now();
+          if (now - lastHeartbeat >= 30_000) {
+            await reportVisibleIssues(page);
+            console.log("Still waiting for CAPTCHA or portal validation to enable Sign In.");
+            lastHeartbeat = now;
+          }
+        }
+      }
+
+      if (!enabled) {
+        return { fieldsFilled: false, submitted: false };
+      }
+
+      if (!await clickPortalControl(page, submitButton, { timeout: 5_000 })) {
+        return { fieldsFilled: false, submitted: false };
+      }
+      console.log("Clicked Sign In after verifying both fields.");
+      return { fieldsFilled: true, submitted: true };
+    } catch (error) {
+      console.warn("Automatic sign-in could not complete: " + error.message);
+      return { fieldsFilled: false, submitted: false };
+    }
+  }
+
+  const frameDiagnostics = await Promise.all(page.frames().map(async (frame) => {
+    const inputs = await frame.locator("input").evaluateAll(loginInputMetadata).catch(() => []);
+    const buttons = await frame.locator('button, [role="button"], input[type="submit"]')
+      .evaluateAll(loginButtonMetadata).catch(() => []);
+    let safeUrl = "";
+    try {
+      const parsed = new URL(frame.url());
+      safeUrl = parsed.origin + parsed.pathname;
+    } catch {
+      safeUrl = "unavailable";
+    }
+    return {
+      url: safeUrl,
+      inputs: inputs.map(({ index, type, hint, visible, disabled, readOnly }) => ({
+        index, type, hint, visible, disabled, readOnly,
+      })),
+      signInControls: buttons.filter(({ name }) => /sign\s*in|log\s*in|login/i.test(name))
+        .map(({ name, visible, disabled, type }) => ({ name, visible, disabled, type })),
+    };
+  }));
+  console.warn("Could not identify the login controls. Safe field diagnostics (input values omitted): " + JSON.stringify(frameDiagnostics));
+  return { fieldsFilled: false, submitted: false };
+}
 function isOtpPage(pageText) {
   return /(?:verify otp|otp verification|enter (?:the )?otp)/i.test(pageText);
 }
@@ -691,106 +1161,249 @@ function isAuthenticationPage(pageText) {
   return isOtpPage(pageText) || /(?:your contact number|enter your password|sign in now|forgot password|one[- ]time password|verification code)/i.test(pageText);
 }
 
-function isBookingPage(step) {
-  return ["book", "webfile", "centre", "date", "payment", "confirmed"].includes(step.key);
+async function isOtpPageVisible(page, pageText) {
+  return isOtpPage(pageText) || await page.locator('input[autocomplete="one-time-code"]').isVisible().catch(() => false);
+}
+
+async function isAuthenticationPageVisible(page, pageText) {
+  if (isAuthenticationPage(pageText)) {
+    return true;
+  }
+  for (const frame of page.frames()) {
+    if (await frame.locator('input[type="password"]').isVisible().catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function isBookingSurfaceReady(page) {
+  return waitForAnyState([
+    { locator: page.getByRole("button", { name: "Take Your Appointment", exact: true }) },
+    { locator: page.getByRole("link", { name: "Take Your Appointment", exact: true }) },
+    { locator: page.getByRole("button", { name: "Next Step", exact: true }) },
+    { locator: page.getByRole("link", { name: "Next Step", exact: true }) },
+    { locator: page.getByRole("button", { name: /book your appointment|book appointment/i }) },
+    { locator: page.getByRole("link", { name: /book your appointment|book appointment/i }) },
+    { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    { locator: page.getByLabel(/select ivac cent(?:re|er)/i) },
+    { locator: page.locator('input[type="date"]'), state: "visible" },
+    { locator: page.getByRole("button", { name: /pay now/i }) },
+  ], 100);
+}
+
+async function waitForAuthenticationOutcome(page, afterOtp = false) {
+  let lastHeartbeat = 0;
+  let sawAlert = false;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return "closed";
+    }
+    const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    const otpPageVisible = await isOtpPageVisible(page, pageText);
+    if (!afterOtp && otpPageVisible) {
+      return "otp";
+    }
+    if (!await isAuthenticationPageVisible(page, pageText) && await isBookingSurfaceReady(page)) {
+      return "authenticated";
+    }
+    if (!sawAlert && await page.getByRole("alert").isVisible().catch(() => false)) {
+      console.warn("The portal displayed an authentication alert. Resolve it in the browser; the helper is waiting for the next page state.");
+      sawAlert = true;
+    }
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(afterOtp
+        ? "Waiting for OTP verification to finish and the authenticated booking page to appear."
+        : "Waiting for the sign-in result: OTP verification or the authenticated booking page.");
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return "closed";
+}
+
+async function waitForBookingNavigation(page, label) {
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return { type: "closed" };
+    }
+    if (await isWebfileStepReady(page)) {
+      return { type: "webfile" };
+    }
+    const nextStep = await findUniqueControl(page, ["button", "link"], ["Next Step"]);
+    if (nextStep.found || nextStep.ambiguous) {
+      return { type: "next", control: nextStep };
+    }
+    const bookingEntry = await findUniqueControl(page, ["button", "link"], ["Book Your Appointment", "Book appointment"]);
+    if (bookingEntry.found || bookingEntry.ambiguous) {
+      return { type: "book", control: bookingEntry };
+    }
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(`Still waiting for the ${label} page/control to become ready.`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return { type: "closed" };
+}
+
+async function waitForNextOrWebfile(page, label) {
+  let lastHeartbeat = 0;
+  while (!page.isClosed()) {
+    if (!await waitForPortalNoticesClosed(page)) {
+      return { type: "closed" };
+    }
+    if (await isWebfileStepReady(page)) {
+      return { type: "webfile" };
+    }
+    const nextStep = await findUniqueControl(page, ["button", "link"], ["Next Step"]);
+    if (nextStep.found || nextStep.ambiguous) {
+      return { type: "next", control: nextStep };
+    }
+    const now = Date.now();
+    if (now - lastHeartbeat >= 30_000) {
+      await reportVisibleIssues(page);
+      console.log(`Still waiting for ${label}.`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return { type: "closed" };
 }
 
 export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   await dismissPortalNotices(page);
-  console.log("Guided booking started. The helper will open the sign-in page and fill local credentials when configured; CAPTCHA and OTP stay in the browser.");
+  console.log("Guided booking started. Each portal action waits for its next page/control state before the helper continues; CAPTCHA and OTP stay in the browser.");
 
   let current = await reportVisibleIssues(page);
-  if (!isBookingPage(current.step)) {
-    const takeAppointment = await findUniqueControl(page, ["button", "link"], ["Take Your Appointment"]);
-    if (takeAppointment.found) {
-      await takeAppointment.locator.click({ timeout: 5_000 });
-      await page.getByText(/your contact number/i).waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
-    } else if (!isAuthenticationPage(current.pageText)) {
-      console.log("Could not uniquely identify the Take Your Appointment button. Open the sign-in page manually.");
-      await waitForManualStep(prompts, "Click Take Your Appointment and open the Sign In page.");
+  if (!await isAuthenticationPageVisible(page, current.pageText) && !await isActiveBookingStepReady(page) && !await isWebfileStepReady(page)) {
+    const startReady = await waitForPortalStep(page, "appointment entry or sign-in page", [
+      { locator: page.getByRole("button", { name: "Take Your Appointment", exact: true }) },
+      { locator: page.getByRole("link", { name: "Take Your Appointment", exact: true }) },
+      { locator: page.locator('input[type="password"]'), state: "visible" },
+      { locator: page.getByRole("button", { name: /book your appointment|book appointment/i }) },
+      { locator: page.getByRole("link", { name: /book your appointment|book appointment/i }) },
+      { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    ]);
+    if (!startReady) {
+      return;
     }
-  }
-
-  current = await reportVisibleIssues(page);
-  let credentialsAttempted = false;
-  let credentialsFilled = false;
-  while (isAuthenticationPage(current.pageText)) {
-    if (
-      !isOtpPage(current.pageText) &&
-      credentials &&
-      !credentialsAttempted
-    ) {
-      credentialsAttempted = true;
-      credentialsFilled = await fillAndSubmitLogin(page, credentials);
-      if (credentialsFilled) {
-        current = await reportVisibleIssues(page);
-        if (!isAuthenticationPage(current.pageText)) {
-          break;
-        }
-        if (isOtpPage(current.pageText)) {
-          continue;
+    current = await reportVisibleIssues(page);
+    if (!await isAuthenticationPageVisible(page, current.pageText) && !await isActiveBookingStepReady(page) && !await isWebfileStepReady(page)) {
+      const takeAppointment = await findUniqueControl(page, ["button", "link"], ["Take Your Appointment"]);
+      if (takeAppointment.found) {
+        if (!await clickPortalControl(page, takeAppointment.locator, { timeout: 5_000 })) return;
+        if (!await waitForBookingStart(page)) {
+          console.log("The browser closed before the sign-in or booking page appeared.");
+          return;
         }
       }
     }
+  }
 
-    const instruction = isOtpPage(current.pageText)
-      ? "Enter the OTP in the browser and click Verify OTP yourself. The helper will not collect or type the code. Press Enter here after verification completes."
-      : credentialsFilled
-        ? "The sign-in page is still open. Complete CAPTCHA if shown, verify the prefilled details, and click Sign In if needed; press Enter here after sign-in completes."
-        : credentials
-          ? "The login form could not be filled safely. Enter your contact number and password in the browser, complete Cloudflare/CAPTCHA there, and press Enter here after sign-in completes."
-          : "Enter your contact number and password in the browser. Complete Cloudflare/CAPTCHA there. If the Verify OTP screen appears, enter the OTP and click Verify OTP yourself; press Enter here after sign-in completes.";
-    await waitForManualStep(prompts, instruction);
-    await dismissPortalNotices(page);
-    current = await reportVisibleIssues(page);
-    if (isAuthenticationPage(current.pageText) && !await askYesNo(prompts, "The page still appears to be on sign-in/OTP. Wait for you to finish it and check again?")) {
-      console.log("Guided booking stopped before uploading any file.");
+  current = await reportVisibleIssues(page);
+  if (await isAuthenticationPageVisible(page, current.pageText)) {
+    let authOutcome;
+    if (await isOtpPageVisible(page, current.pageText)) {
+      console.log("The Verify OTP page is open. Enter the OTP and click Verify OTP in the browser; the helper will wait for the authenticated booking page automatically.");
+      authOutcome = await waitForAuthenticationOutcome(page, true);
+    } else {
+      let loginResult = { fieldsFilled: false, submitted: false };
+      if (credentials) {
+        loginResult = await fillAndSubmitLogin(page, credentials);
+      }
+      if (!loginResult.fieldsFilled) {
+        console.log("Enter your contact number and password in the browser, complete CAPTCHA, then click Sign In. The helper will wait for the OTP or the authenticated booking page; no Enter key is needed.");
+      } else if (!loginResult.submitted) {
+        console.log("Credentials are filled. Complete CAPTCHA and click Sign In in the browser; the helper will wait for the next page state automatically.");
+      }
+
+      authOutcome = await waitForAuthenticationOutcome(page);
+      if (authOutcome === "otp") {
+        console.log("The Verify OTP page appeared. Enter the OTP and click Verify OTP in the browser; the helper will continue only after the authenticated booking page appears.");
+        authOutcome = await waitForAuthenticationOutcome(page, true);
+      }
+    }
+    if (authOutcome !== "authenticated") {
+      console.log("The browser closed before sign-in completed. No booking action was started.");
       return;
     }
-  }  await dismissPortalNotices(page);
-  current = await reportVisibleIssues(page);
-  if (!isBookingPage(current.step)) {
-    const takeAfterLogin = await findUniqueControl(page, ["button", "link"], ["Take Your Appointment"]);
-    if (takeAfterLogin.found) {
-      await takeAfterLogin.locator.click({ timeout: 5_000 });
-      await page.waitForTimeout(800);
-      await dismissPortalNotices(page);
-      current = await reportVisibleIssues(page);
+    console.log("Authentication completed; the booking page is ready.");
+  }
+
+  await dismissPortalNotices(page);
+  if (!await isActiveBookingStepReady(page) && !await isWebfileStepReady(page)) {
+    let takeAfterLogin = await findUniqueControl(page, ["button", "link"], ["Take Your Appointment"]);
+    if (!takeAfterLogin.found) {
+      const bookingStartReady = await waitForPortalStep(page, "booking entry page", [
+        { locator: page.getByRole("button", { name: "Take Your Appointment", exact: true }) },
+        { locator: page.getByRole("link", { name: "Take Your Appointment", exact: true }) },
+        { locator: page.getByRole("button", { name: "Next Step", exact: true }) },
+        { locator: page.getByRole("link", { name: "Next Step", exact: true }) },
+        { locator: page.getByRole("button", { name: /book your appointment|book appointment/i }) },
+        { locator: page.getByRole("link", { name: /book your appointment|book appointment/i }) },
+        { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+      ]);
+      if (!bookingStartReady) {
+        return;
+      }
+      takeAfterLogin = await findUniqueControl(page, ["button", "link"], ["Take Your Appointment"]);
+    }
+    if (takeAfterLogin.found && !await isActiveBookingStepReady(page)) {
+      if (!await clickPortalControl(page, takeAfterLogin.locator, { timeout: 5_000 })) return;
+      if (!await waitForBookingStart(page)) {
+        console.log("The browser closed before the booking entry page appeared.");
+        return;
+      }
     }
   }
 
-  const guideHasNextStep = await findUniqueControl(page, ["button", "link"], ["Next Step"]);
-  if (!isBookingPage(current.step) && !guideHasNextStep.found && !await askYesNo(prompts, "Are you signed in and ready to start Book Your Appointment?")) {
-    console.log("Guided booking stopped before uploading any file.");
-    return;
-  }
-
-  await clickNextStepIfPresent(page);
-  current = await reportVisibleIssues(page);
-
-  const bookingEntry = await findUniqueControl(page, ["button", "link"], ["Book Your Appointment", "Book appointment"]);
-  if (!bookingEntry.found && current.step.key !== "webfile") {
-    const reason = bookingEntry.ambiguous ? "More than one matching booking control was found." : "No unique booking control was found.";
-    console.log(`${reason} Open the appointment booking page manually.`);
-    await waitForManualStep(prompts, "Open the Book Your Appointment page.");
-    await clickNextStepIfPresent(page);
-  } else if (bookingEntry.found) {
-    await bookingEntry.locator.click({ timeout: 5_000 });
-    await page.waitForTimeout(800);
-    await dismissPortalNotices(page);
-    await clickNextStepIfPresent(page);
-  }
-
-  current = await reportVisibleIssues(page);
-  if (current.step.key !== "webfile") {
-    const primaryUpload = page.getByText(/upload primary applicant(?:'s|’s) webfile/i);
-    if (await primaryUpload.count() === 0) {
-      console.log("The applicant Webfile upload page was not recognized. Open it in the browser, then continue.");
-      await waitForManualStep(prompts, "Open the Webfile upload page. If the guide screen appears, click Next Step.");
-      await clickNextStepIfPresent(page);
-      current = await reportVisibleIssues(page);
+  if (!await isWebfileStepReady(page)) {
+    let navigation = await waitForBookingNavigation(page, "booking");
+    if (navigation.type === "closed") {
+      console.log("The browser closed before the booking page became ready.");
+      return;
+    }
+    if (navigation.type === "next") {
+      if (navigation.control.ambiguous || !await clickNextStepIfPresent(page)) {
+        console.log("The Next Step control was ambiguous or the Webfile page did not appear. Guided booking stopped without starting an upload.");
+        return;
+      }
+    } else if (navigation.type === "book") {
+      if (navigation.control.ambiguous) {
+        console.log("More than one Book Your Appointment control is visible. Guided booking stopped without clicking either one.");
+        return;
+      }
+      if (!await clickPortalControl(page, navigation.control.locator, { timeout: 5_000 })) return;
+      navigation = await waitForNextOrWebfile(page, "the Next Step control or Webfile upload page");
+      if (navigation.type === "closed") {
+        console.log("The browser closed before the Webfile upload page appeared.");
+        return;
+      }
+      if (navigation.type === "next" &&
+        (navigation.control.ambiguous || !await clickNextStepIfPresent(page))) {
+        console.log("The Next Step control was ambiguous or the Webfile page did not appear. Guided booking stopped without starting an upload.");
+        return;
+      }
     }
   }
+
+  if (!await isWebfileStepReady(page)) {
+    const uploadReady = await waitForPortalStep(page, "Webfile upload", [
+      { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+      { locator: page.getByText(/upload primary applicant(?:'s|’s) webfile/i) },
+    ]);
+    if (!uploadReady) {
+      console.log("The browser closed before the Webfile upload page appeared.");
+      return;
+    }
+  }
+  current = await reportVisibleIssues(page);
 
   const applicants = await getApplicantPdfs(prompts);
   if (!applicants) {
@@ -805,13 +1418,15 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   if (!centre) {
     return;
   }
-  await page.waitForTimeout(500);
 
   const date = await chooseDate(page, prompts);
+  if (!date) {
+    return;
+  }
   if (!await completeConsentIfNeeded(page, prompts)) {
     return;
   }
-  if (!await waitForCaptchaIfNeeded(page, prompts)) {
+  if (!await waitForCaptchaIfNeeded(page)) {
     return;
   }
 
@@ -820,12 +1435,17 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
     console.log("Resolve the portal message before submitting the date. Guided booking stopped.");
     return;
   }
-  if (beforeSubmit.step.key === "payment") {
+  if (await isPaymentStepReady(page)) {
     console.log("The portal is at payment. No payment action was taken.");
     return;
   }
 
-  const proceed = await findUniqueControl(page, ["button", "link"], ["Submit", "Confirm Appointment", "Proceed to Payment", "Continue"]);
+  const proceed = await waitForUniqueControlUntilReady(
+    page,
+    ["button", "link"],
+    ["Submit", "Confirm Appointment", "Proceed to Payment", "Continue"],
+    "appointment-submit",
+  );
   if (!proceed.found) {
     const reason = proceed.ambiguous ? "More than one submit/proceed control was found." : "No unique submit/proceed control was found.";
     console.log(`${reason} The selected date has not been submitted by the helper. Review the portal and complete that step yourself if appropriate.`);
@@ -841,8 +1461,16 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
     return;
   }
 
-  await proceed.locator.click({ timeout: 5_000 });
-  await page.waitForTimeout(1_000);
+  if (!await clickPortalControl(page, proceed.locator, { timeout: 5_000 })) return;
+  const paymentStepReady = await waitForPortalStep(page, "payment or appointment confirmation", [
+    { locator: page.getByRole("button", { name: /pay now/i }) },
+    { locator: page.getByText(/payment details|payment gateway/i) },
+    { locator: page.getByText(/appointment (?:is )?confirmed|booking (?:is )?confirmed/i) },
+  ]);
+  if (!paymentStepReady) {
+    console.log("The date submission was clicked, but payment or confirmation did not appear. Guided booking stopped; inspect the portal before retrying.");
+    return;
+  }
   const result = await reportVisibleIssues(page);
   if (result.step.key === "payment") {
     console.log("Reached the payment step. Payment was not made; complete it yourself if you want to confirm the appointment.");

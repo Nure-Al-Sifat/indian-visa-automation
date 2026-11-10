@@ -43,7 +43,7 @@ test("recognizes Take Your Appointment, the Next Step guide, and OTP screens", (
 });
 
 test("autofill changes only exact, eligible label matches", async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
   try {
     const page = await browser.newPage();
     await page.setContent(`

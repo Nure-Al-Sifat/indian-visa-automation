@@ -77,6 +77,75 @@ async function readPageText(page) {
   return page.locator("body").innerText({ timeout: 5_000 });
 }
 
+function redactSensitiveText(value, credentials) {
+  let text = String(value ?? "");
+  for (const secret of [credentials?.password, credentials?.contactNumber]) {
+    if (typeof secret === "string" && secret.length > 0) {
+      text = text.split(secret).join("[redacted]");
+    }
+  }
+  text = text.replace(/https?:\/\/[^\s"'<>]+/g, (value) => {
+    try {
+      return new URL(value).origin;
+    } catch {
+      return "[redacted URL]";
+    }
+  });
+  return text;
+}
+
+function safeUrlForLog(value, credentials) {
+  try {
+    const url = new URL(value);
+    return redactSensitiveText(url.origin, credentials);
+  } catch {
+    return "unknown location";
+  }
+}
+
+function installBrowserErrorReporting(page, credentials) {
+  page.on("console", (message) => {
+    if (message.type() !== "error") {
+      return;
+    }
+
+    const location = message.location();
+    const source = location.url
+      ? " (" + safeUrlForLog(location.url, credentials) +
+        (location.lineNumber ? ":" + location.lineNumber : "") + ")"
+      : "";
+    console.error(
+      "[Browser console error] " +
+        redactSensitiveText(message.text(), credentials) +
+        source,
+    );
+  });
+
+  page.on("pageerror", (error) => {
+    const stackLine = String(error.stack || "")
+      .split("\n")
+      .find((line) => /https?:\/\//.test(line));
+    const sourceUrl = stackLine?.match(/https?:\/\/[^\s)]+/)?.[0];
+    const source = sourceUrl
+      ? " (" + safeUrlForLog(sourceUrl, credentials) + ")"
+      : "";
+    console.error(
+      "[Browser page error] " +
+        redactSensitiveText(error.name + ": " + error.message, credentials) +
+        source,
+    );
+  });
+
+  page.on("requestfailed", (request) => {
+    const failure = request.failure();
+    console.error(
+      "[Browser request failed] " +
+        request.method() + " " + safeUrlForLog(request.url(), credentials) +
+        " (" + redactSensitiveText(failure?.errorText || "unknown", credentials) + ")",
+    );
+  });
+}
+
 function printPageStatus(pageText, previous) {
   const step = getPortalStep(pageText);
   const availability = getAvailabilityState(pageText);
@@ -148,7 +217,12 @@ async function main() {
     headless: false,
     args: ["--disable-quic"],
   });
+
   const page = context.pages()[0] || (await context.newPage());
+  installBrowserErrorReporting(page, credentials);
+  context.on("page", (newPage) => {
+    installBrowserErrorReporting(newPage, credentials);
+  });
   let stopWatching = () => {};
   const prompts = readline.createInterface({ input: stdin, output: stdout });
 
@@ -156,9 +230,11 @@ async function main() {
     await page.goto(PORTAL_URL, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(500);
     await dismissPortalNotices(page);
-    stopWatching = startPortalWatcher(page);
     console.log(
       "The portal is open in a visible browser. Starting guided booking automatically from Take Your Appointment.",
+    );
+    console.log(
+      "Browser console errors, uncaught page errors, and failed requests will be shown here; credential values and URL paths are redacted.",
     );
     if (credentials) {
       console.log("Sign-in credentials will be filled from credentials.json.");
@@ -166,7 +242,7 @@ async function main() {
       console.log("No usable credentials.json found; enter your contact number and password in the browser.");
     }
     console.log(
-      "Complete Cloudflare/CAPTCHA and any OTP in the browser; press Enter at the helper prompt when signed in.",
+      "Complete Cloudflare/CAPTCHA and any OTP in the browser. The helper waits for each portal page transition automatically.",
     );
     console.log(
       "The helper stops at payment. It will not enter OTP/CAPTCHA or make payments.",
@@ -182,6 +258,7 @@ async function main() {
         "Review the visible portal page before retrying; the last action may already have taken effect.",
       );
     }
+    stopWatching = startPortalWatcher(page);
 
     while (!page.isClosed()) {
       let answer;

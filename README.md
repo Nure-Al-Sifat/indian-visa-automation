@@ -58,6 +58,7 @@ credentials.json
 - Before the date submission, the helper displays the selected centre and date and asks for a final confirmation. It then proceeds to the payment page and stops. You complete payment yourself.
 - Press `f` to optionally fill matching, visibly labeled fields and selects from `profile.json`. Confirm before filling, then review every field yourself. Password, OTP, CAPTCHA, card, and payment fields are never autofilled.
 - Press `c` to inspect the currently displayed page. The helper reports a best-effort flow step, availability hint, and any recognized error. While it is open, the helper checks visible page text every 15 seconds and reports changes.
+- Browser console errors, uncaught page errors, and failed network requests are printed in the helper terminal. Credential values and URL paths/query strings are redacted.
 - Press `q` to close the browser.
 
 The helper fills the contact number and password from `credentials.json` only when it can identify the sign-in form safely. It never enters OTP, solves CAPTCHA, reloads the page, handles queues, or makes payments. It does not access undocumented APIs. Its text and control matching can miss changed, hidden, or image-only portal elements; verify the live page yourself, especially when the helper asks you to complete a step manually.

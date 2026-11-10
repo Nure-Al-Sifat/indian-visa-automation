@@ -7,7 +7,7 @@ import { chromium } from "patchright";
 import { dismissPortalNotices, runGuidedBookingFlow } from "../src/booking.js";
 
 test("dismisses repeated IVAC notices using their close controls, never the download button", async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
   try {
     const page = await browser.newPage();
     await page.setContent(`
@@ -44,7 +44,7 @@ test("dismisses repeated IVAC notices using their close controls, never the down
 });
 
 test("closes notices, opens Next Step, uploads each applicant, selects, and submits only to payment", async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ivac-booking-test-"));
   const primaryPdf = path.join(tempDir, "primary-webfile.pdf");
   const secondaryPdf = path.join(tempDir, "secondary-webfile.pdf");
@@ -74,6 +74,10 @@ test("closes notices, opens Next Step, uploads each applicant, selects, and subm
           <h2>Important Notice</h2>
         </section>
       `);
+      await page.locator("#postOtpNotice button").evaluate((button) => button.addEventListener("click", () => {
+        window.postOtpNoticeClosed = true;
+        button.closest("[role=dialog]").hidden = true;
+      }));
       await page.locator("#takeAfterLogin").evaluate((button) => button.addEventListener("click", () => {
         window.postLoginTakeClicked = true;
         document.body.innerHTML = `
@@ -86,17 +90,25 @@ test("closes notices, opens Next Step, uploads each applicant, selects, and subm
           document.body.innerHTML = `
             <section id="upload-page">
               <h2>Total number of applicants: <span id="applicant-count">0</span></h2>
-              <label for="primary">Upload Primary Applicant's Webfile</label><input id="primary" type="file" onchange="window.selectedFiles.push(this.files[0].name); document.querySelector('#applicant-count').textContent = '1'">
+              <label for="primary">Upload Primary Applicant's Webfile</label><input id="primary" type="file">
               <button id="add">Add Applicant</button>
               <button id="confirm">Confirm All Information is Correct</button>
             </section>
           `;
           window.selectedFiles = [];
+          document.querySelector("#primary").addEventListener("change", function () {
+            window.selectedFiles.push(this.files[0].name);
+            document.querySelector("#applicant-count").textContent = "1";
+          });
           document.querySelector("#add").addEventListener("click", () => {
             document.querySelector("#add").insertAdjacentHTML("beforebegin", `
               <label for="secondary">Upload Secondary Applicant 2's Webfile</label>
-              <input id="secondary" type="file" onchange="window.selectedFiles.push(this.files[0].name); document.querySelector('#applicant-count').textContent = '2'">
+              <input id="secondary" type="file">
             `);
+            document.querySelector("#secondary").addEventListener("change", function () {
+              window.selectedFiles.push(this.files[0].name);
+              document.querySelector("#applicant-count").textContent = "2";
+            });
           });
           document.querySelector("#confirm").addEventListener("click", () => {
             window.applicantsConfirmed = true;
@@ -137,6 +149,7 @@ test("closes notices, opens Next Step, uploads each applicant, selects, and subm
         if (message.startsWith("Path to Primary Applicant")) return primaryPdf;
         if (message.startsWith("Path to Secondary Applicant 2")) return secondaryPdf;
         if (message.startsWith("Upload these 2 original PDF")) return "y";
+        if (message.startsWith("The portal currently shows")) return "y";
         if (message.startsWith("Confirm the 2 applicant Webfiles")) return "y";
         if (message.startsWith("Choose the preferred centre")) return "2";
         if (message.startsWith("Preferred available date")) return "2026-11-18";
@@ -166,5 +179,70 @@ test("closes notices, opens Next Step, uploads each applicant, selects, and subm
     await unlink(primaryPdf).catch(() => {});
     await unlink(secondaryPdf).catch(() => {});
     await rmdir(tempDir).catch(() => {});
+  }
+});
+
+test("sets contact number and password despite paste/inspect restrictions and clicks Sign In Now", async () => {
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <form id="loginForm">
+        <h1>Sign In</h1>
+        <label>Your Contact Number </label>
+        <input name="phone" placeholder="01......" onpaste="return false;" oncontextmenu="return false;">
+        <label>Password </label>
+        <input type="password" name="password" placeholder="Enter your password" onpaste="return false;" oncontextmenu="return false;">
+        <button id="signInBtn" type="submit" disabled="">
+          <span>Sign In Now</span>
+        </button>
+      </form>
+    `);
+
+    await page.evaluate(() => {
+      const form = document.querySelector("#loginForm");
+      const phone = document.querySelector('input[name="phone"]');
+      const pass = document.querySelector('input[name="password"]');
+      const btn = document.querySelector("#signInBtn");
+
+      const checkValidity = () => {
+        if (phone.value.length > 5 && pass.value.length > 5) {
+          btn.removeAttribute("disabled");
+        } else {
+          btn.setAttribute("disabled", "");
+        }
+      };
+
+      phone.addEventListener("input", checkValidity);
+      pass.addEventListener("input", checkValidity);
+      phone.addEventListener("change", checkValidity);
+      pass.addEventListener("change", checkValidity);
+
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        window.signedIn = true;
+        document.body.innerHTML = '<h1>Verify OTP</h1><label for="otp">OTP</label><input id="otp" type="text">';
+      });
+    });
+
+    const questions = [];
+    const prompts = {
+      async question(message) {
+        questions.push(message);
+        return "";
+      },
+    };
+
+    const credentials = {
+      contactNumber: "01934957333",
+      password: "Pass2026$",
+    };
+
+    await runGuidedBookingFlow(page, prompts, credentials);
+
+    assert.equal(await page.evaluate(() => Boolean(window.signedIn)), true, "Sign In Now was submitted");
+    assert.ok(questions.some((q) => q.startsWith("Enter the OTP in the browser")), "advanced to the OTP step");
+  } finally {
+    await browser.close();
   }
 });
