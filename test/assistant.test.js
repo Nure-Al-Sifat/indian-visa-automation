@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
-import { fillLabeledFields, getAvailabilityState, isSafeField } from "../src/assistant.js";
+import { chromium } from "patchright";
+import { fillLabeledFields, getAvailabilityState, getPortalStep, isSafeField } from "../src/assistant.js";
 
 test("only eligible labeled form controls are autofill candidates", () => {
   assert.equal(isSafeField("Applicant name", {
@@ -34,6 +34,12 @@ test("availability text check distinguishes possible, unavailable, and unknown",
   assert.equal(getAvailabilityState("An appointment available message"), "possible");
   assert.equal(getAvailabilityState("No appointment available"), "unavailable");
   assert.equal(getAvailabilityState("Please try again later"), "unknown");
+});
+
+test("recognizes Take Your Appointment, the Next Step guide, and OTP screens", () => {
+  assert.equal(getPortalStep("Take Your Appointment").key, "appointment-entry");
+  assert.equal(getPortalStep("To book your visa appointment. Select Next Step.").key, "booking-guide");
+  assert.equal(getPortalStep("Verify OTP").key, "login");
 });
 
 test("autofill changes only exact, eligible label matches", async () => {
