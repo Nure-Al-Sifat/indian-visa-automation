@@ -1,6 +1,7 @@
 import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import { getPortalIssues, getPortalStep } from "./assistant.js";
+import { log } from "./logger.js";
 
 const FILE_INPUT_SELECTOR = 'input[type="file"]';
 const lastVisibleIssuesByPage = new WeakMap();
@@ -206,7 +207,7 @@ async function waitForAnyState(candidates, timeout = 15_000) {
   }
 
   const waits = candidates.map(({ locator, state = "visible" }) =>
-    locator.waitFor({ state, timeout }).then(() => true),
+    locator.first().waitFor({ state, timeout }).then(() => true),
   );
   try {
     return await Promise.any(waits);
@@ -852,7 +853,6 @@ async function waitForDateStep(page) {
       page.locator('[role="combobox"]'),
       page.locator('button').filter({ hasText: /select appointment date|available dates|\b\d{1,2}:\d{2}\s*(?:am|pm)\b/i }),
     ], 200)) {
-      console.log("Portal step ready: appointment-date or time-slot selection.");
       return true;
     }
     await page.waitForTimeout(200);
@@ -865,8 +865,7 @@ async function handleWaitingRoomIfNeeded(page) {
   let pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
 
   if (url.includes("/appointment/waiting") || /(?:waiting for booking portal|no slots available at the moment)/i.test(pageText)) {
-    console.log("Waiting Room detected: 'Waiting for booking portal to open...'. The portal automatically checks for slot release every 50 seconds.");
-    console.log("The helper is actively monitoring; as soon as slots open, it will immediately proceed to date/time selection.");
+    log.waiting("Waiting Room: Portal is checking for slot release every 50 seconds...");
 
     let lastHeartbeat = 0;
     while (!page.isClosed()) {
@@ -875,15 +874,15 @@ async function handleWaitingRoomIfNeeded(page) {
       pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
 
       if (url.includes("/appointment/time-slot") || /(?:select appointment date|available slot|available dates|\b\d{1,2}:\d{2}\s*(?:am|pm)\b)/i.test(pageText)) {
-        console.log("Slot window opened! Advanced to appointment time-slot selection.");
+        log.success("Slot window opened! Advanced to appointment time-slot selection.");
         return true;
       }
 
       const now = Date.now();
-      if (now - lastHeartbeat >= 30_000) {
+      if (now - lastHeartbeat >= 50_000) {
         const timerMatch = pageText.match(/(\d{1,2}\s*[hH]\s*\d{1,2}\s*[mM]\s*\d{1,2}\s*[sS]|\d{1,2}:\d{2}:\d{2})/);
-        const timerInfo = timerMatch ? ` Countdown: ${timerMatch[1]}` : "";
-        console.log(`Still in waiting room.${timerInfo} Monitoring for slot opening...`);
+        const timerInfo = timerMatch ? ` [Countdown: ${timerMatch[1]}]` : "";
+        log.waiting(`Waiting Room: Still monitoring for slot opening...${timerInfo}`);
         lastHeartbeat = now;
       }
       await page.waitForTimeout(500).catch(() => {});
@@ -898,7 +897,8 @@ async function selectSlotTimeIfPresent(page) {
   for (let i = 0; i < count; i++) {
     const btn = slotButtons.nth(i);
     if (await btn.isVisible().catch(() => false) && await btn.isEnabled().catch(() => false)) {
-      console.log(`Selecting available slot time: ${(await btn.innerText().catch(() => "")).trim()}`);
+      const slotText = (await btn.innerText().catch(() => "")).trim();
+      log.step("Appointment Slot", `Selected: ${slotText}`);
       await clickPortalControl(page, btn, { timeout: 3_000 });
       break;
     }
@@ -908,7 +908,6 @@ async function selectSlotTimeIfPresent(page) {
 async function clickSlotContinueIfPresent(page) {
   const continueButtons = page.locator('button').filter({ hasText: /^(?:continue|proceed|next step|confirm slot|book slot)$/i });
   if (await continueButtons.count() > 0 && await continueButtons.first().isEnabled().catch(() => false)) {
-    console.log("Clicking Continue to proceed to next step...");
     await clickPortalControl(page, continueButtons.first(), { timeout: 5_000 });
   }
 }
@@ -942,7 +941,7 @@ async function chooseCentre(page, prompts) {
         options.forEach((option, index) => console.log(`  ${index + 1}. ${option.label}`));
         const answer = Number((await prompts.question("Choose the preferred centre number: ")).trim());
         if (!Number.isInteger(answer) || answer < 1 || answer > options.length) {
-          console.log("No valid IVAC Centre was selected.");
+          log.warn("No valid IVAC Centre was selected.");
           return null;
         }
         selected = options[answer - 1];
@@ -952,10 +951,10 @@ async function chooseCentre(page, prompts) {
       }
       await select.selectOption({ value: selected.value });
       if (await select.inputValue() !== selected.value) {
-        console.log("The IVAC Centre selection did not remain selected. Guided booking stopped before date selection.");
+        log.warn("The IVAC Centre selection did not remain selected. Guided booking stopped before date selection.");
         return null;
       }
-      console.log(`IVAC Centre selected: ${selected.label}`);
+      log.step("IVAC Centre", `Selected: ${selected.label}`);
 
       // If on /appointment/mission, click submit/continue button
       const nextBtn = page.locator('button').filter({ hasText: /^(?:next step|continue|proceed|submit)$/i });
@@ -964,7 +963,7 @@ async function chooseCentre(page, prompts) {
       }
 
       if (!await waitForDateStep(page)) {
-        console.log("The centre was selected, but the appointment-date step did not appear. Guided booking stopped for review.");
+        log.warn("The centre was selected, but the appointment-date step did not appear. Guided booking stopped for review.");
         return null;
       }
       return selected.label;
@@ -977,7 +976,7 @@ async function chooseCentre(page, prompts) {
   });
   if (await centreCards.count() > 0) {
     const cardText = (await centreCards.first().innerText()).trim();
-    console.log(`Selecting available centre card: ${cardText}`);
+    log.step("IVAC Centre", `Selected: ${cardText}`);
     await clickPortalControl(page, centreCards.first(), { timeout: 3_000 });
     const nextBtn = page.locator('button').filter({ hasText: /^(?:next step|continue|proceed|submit)$/i });
     if (await nextBtn.count() > 0 && await nextBtn.first().isEnabled().catch(() => false)) {
@@ -986,10 +985,9 @@ async function chooseCentre(page, prompts) {
     if (await waitForDateStep(page)) return cardText;
   }
 
-  console.log("Could not safely identify one IVAC Centre selector. Select the centre in the browser yourself.");
-  console.log("Select the preferred eligible IVAC Centre in the browser; waiting for the date selector to appear.");
+  log.info("Select the preferred eligible IVAC Centre in the browser; waiting for the date selector to appear.");
   if (!await waitForDateStep(page)) {
-    console.log("The appointment-date step did not appear after centre selection. Guided booking stopped for review.");
+    log.warn("The appointment-date step did not appear after centre selection. Guided booking stopped for review.");
     return null;
   }
   return (await prompts.question("Enter the selected centre name for the final review: ")).trim() || "Centre selected in browser";
@@ -1025,6 +1023,7 @@ async function chooseDate(page, prompts) {
   if (await dateInputs.count() === 1 && date) {
     await dateInputs.fill(date);
     if (await dateInputs.inputValue() === date) {
+      log.step("Appointment Date", `Selected: ${date}`);
       await selectSlotTimeIfPresent(page);
       await waitForCaptchaIfNeeded(page);
       await clickSlotContinueIfPresent(page);
@@ -1043,7 +1042,7 @@ async function chooseDate(page, prompts) {
       const match = date ? options.find(o => o.value.includes(date) || o.label.includes(date)) : null;
       const chosen = match || options[0];
       await dateSelect.first().selectOption({ value: chosen.value });
-      console.log(`Selected appointment date: ${chosen.label}`);
+      log.step("Appointment Date", `Selected: ${chosen.label}`);
       await selectSlotTimeIfPresent(page);
       await waitForCaptchaIfNeeded(page);
       await clickSlotContinueIfPresent(page);
@@ -1058,6 +1057,7 @@ async function chooseDate(page, prompts) {
     const dayButton = page.getByRole("button", { name: dayNumber, exact: true });
     if (await dayButton.count() === 1 && await dayButton.isEnabled()) {
       if (await clickPortalControl(page, dayButton)) {
+        log.step("Appointment Date", `Selected: ${date}`);
         await selectSlotTimeIfPresent(page);
         await waitForCaptchaIfNeeded(page);
         await clickSlotContinueIfPresent(page);
@@ -1069,7 +1069,8 @@ async function chooseDate(page, prompts) {
   // Case 4: Any available slot buttons
   const availableSlotButtons = page.locator('button').filter({ hasText: /\b(?:\d{1,2}:\d{2}\s*(?:AM|PM)|slot-\d+)\b/i });
   if (await availableSlotButtons.count() > 0) {
-    console.log("Selecting available time slot...");
+    const slotText = (await availableSlotButtons.first().innerText().catch(() => "")).trim();
+    log.step("Appointment Slot", `Selected: ${slotText}`);
     await clickPortalControl(page, availableSlotButtons.first());
     await waitForCaptchaIfNeeded(page);
     await clickSlotContinueIfPresent(page);
@@ -1077,9 +1078,9 @@ async function chooseDate(page, prompts) {
   }
 
   // Fallback: let user select in browser if custom calendar
-  console.log("Select the preferred date and slot in the browser; waiting for next step...");
+  log.info("Select the preferred date and slot in the browser; waiting for next step...");
   if (!await waitForSubmitStep()) {
-    console.log("The consent/submit step did not appear after date selection. Guided booking stopped for review.");
+    log.warn("The consent/submit step did not appear after date selection. Guided booking stopped for review.");
     return null;
   }
   return date || "Selected in browser";
@@ -1100,17 +1101,17 @@ async function completeConsentIfNeeded(page, prompts) {
   if (await checkbox.isChecked()) {
     return true;
   }
-  console.log(`Portal consent text: ${consent[0].label}`);
   if (!await askYesNo(prompts, "Do you agree to this consent and want the helper to select it?")) {
-    console.log("Consent was not selected. Guided booking stopped.");
+    log.warn("Consent was not selected. Guided booking stopped.");
     return false;
   }
   if (!await waitForPortalNoticesClosed(page)) return false;
   await checkbox.check();
   if (!await checkbox.isChecked()) {
-    console.log("The consent checkbox did not remain selected. Guided booking stopped before submission.");
+    log.warn("The consent checkbox did not remain selected. Guided booking stopped before submission.");
     return false;
   }
+  log.success("Terms & declaration consent confirmed.");
   return true;
 }
 
@@ -1119,7 +1120,7 @@ async function waitForCaptchaIfNeeded(page) {
   if (await captcha.count() === 0) {
     return true;
   }
-  console.log("Complete the CAPTCHA directly in the browser. Waiting for the portal to register it; the helper will not solve it.");
+  log.action("Complete the Cloudflare / CAPTCHA directly in the browser...");
   let lastHeartbeat = 0;
   while (!page.isClosed()) {
     if (!await waitForPortalNoticesClosed(page)) {
@@ -1129,13 +1130,12 @@ async function waitForCaptchaIfNeeded(page) {
       .evaluateAll((elements) => elements.some((element) => Boolean(element.value?.trim())))
       .catch(() => false);
     if (solved) {
-      console.log("The portal has registered the CAPTCHA response.");
+      log.success("CAPTCHA response verified by portal.");
       return true;
     }
     const now = Date.now();
     if (now - lastHeartbeat >= 30_000) {
       await reportVisibleIssues(page);
-      console.log("Still waiting for the CAPTCHA response to be registered by the portal.");
       lastHeartbeat = now;
     }
     await page.waitForTimeout(300).catch(() => {});
@@ -1144,16 +1144,38 @@ async function waitForCaptchaIfNeeded(page) {
 }
 
 async function reportVisibleIssues(page) {
-  const pageText = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
-  const issues = getPortalIssues(pageText);
-  const previousIssues = lastVisibleIssuesByPage.get(page) || new Set();
-  const currentIssueKeys = new Set(issues.map(({ key }) => key));
-  for (const issue of issues) {
-    if (!previousIssues.has(issue.key)) {
-      console.warn(`Portal issue: ${issue.label}. ${issue.guidance}`);
+  let issues = [];
+  const alertLocator = page.locator('[role="alert"], .alert, .text-red-500, [aria-live="assertive"], .toast');
+  const alertCount = await alertLocator.count().catch(() => 0);
+  if (alertCount > 0) {
+    const visibleAlerts = [];
+    for (let i = 0; i < alertCount; i++) {
+      const el = alertLocator.nth(i);
+      if (await el.isVisible().catch(() => false)) {
+        const text = (await el.innerText().catch(() => "")).trim();
+        if (text && !/^(?:\*|close|x)$/i.test(text)) {
+          visibleAlerts.push(text);
+        }
+      }
+    }
+    if (visibleAlerts.length > 0) {
+      const combined = visibleAlerts.join(" ");
+      issues = getPortalIssues(combined);
+      if (issues.length === 0) {
+        issues = [{ key: "portal-alert", label: combined, guidance: "Please check the browser." }];
+      }
+      const previousIssues = lastVisibleIssuesByPage.get(page) || new Set();
+      const currentIssueKeys = new Set(issues.map(({ key }) => key));
+      for (const issue of issues) {
+        if (!previousIssues.has(issue.key)) {
+          log.warn(`Portal Alert: ${issue.label}`);
+        }
+      }
+      lastVisibleIssuesByPage.set(page, currentIssueKeys);
     }
   }
-  lastVisibleIssuesByPage.set(page, currentIssueKeys);
+
+  const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
   return { pageText, issues, step: getPortalStep(pageText) };
 }
 
@@ -1203,11 +1225,11 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
   for (let index = 0; index < applicants.length; index += 1) {
     const applicant = applicants[index];
     const applicantNumber = index + 1;
-    console.log(`Preparing upload for applicant ${applicantNumber} of ${applicants.length} (${applicant.label}): ${path.basename(applicant.path)}...`);
+    log.step("Webfile Upload", `Preparing applicant ${applicantNumber} of ${applicants.length} (${applicant.label}): ${path.basename(applicant.path)}`);
 
     const fileInput = await chooseFileInput(page, prompts, applicantNumber, usedInputs);
     if (!fileInput) {
-      console.log(`Could not safely identify a separate file input for ${applicant.label}. No previous Webfile was replaced.`);
+      log.warn(`Could not safely identify a separate file input for ${applicant.label}.`);
       return false;
     }
 
@@ -1231,7 +1253,7 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
         `Upload Webfile for ${applicant.label}`,
       );
       if (!uploadAction.found) {
-        console.log("The upload action is ambiguous. The helper stopped before submitting a Webfile.");
+        log.warn("The upload action is ambiguous. Guided booking stopped.");
         return false;
       }
       if (!await clickPortalControl(page, uploadAction.locator, { timeout: 5_000 })) return false;
@@ -1239,25 +1261,25 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
 
     let report = await reportVisibleIssues(page);
     if (report.issues.length > 0) {
-      console.log(`Resolve the portal message for ${applicant.label} before continuing.`);
+      log.warn(`Resolve the portal message for ${applicant.label} before continuing.`);
       return false;
     }
 
     const acceptedCount = await waitForApplicantCount(page, applicantNumber);
     report = await reportVisibleIssues(page);
     if (report.issues.length > 0) {
-      console.log(`Resolve the portal message for ${applicant.label} before continuing.`);
+      log.warn(`Resolve the portal message for ${applicant.label} before continuing.`);
       return false;
     }
     if (acceptedCount === null) {
-      console.log(`The browser closed or timed out before the portal confirmed ${applicant.label}. The next applicant was not started.`);
+      log.warn(`The browser closed or timed out before the portal confirmed ${applicant.label}.`);
       return false;
     }
     if (acceptedCount < applicantNumber) {
-      console.log(`The portal shows ${acceptedCount} applicant(s), which does not match applicant ${applicantNumber}. The next applicant was not started.`);
+      log.warn(`The portal shows ${acceptedCount} applicant(s), which does not match applicant ${applicantNumber}.`);
       return false;
     }
-    console.log(`Applicant ${applicantNumber} successfully verified. Portal confirmed applicant count: ${acceptedCount}.`);
+    log.success(`Applicant ${applicantNumber} (${applicant.label}) confirmed. Count: ${acceptedCount}.`);
 
     if (index + 1 < applicants.length) {
       const details = await getFileInputDetails(page);
@@ -1267,11 +1289,11 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
           "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
         ]);
         if (addApplicant.found) {
-          console.log(`Clicking ${addApplicant.label} to add next applicant slot...`);
+          log.info(`Adding input slot for applicant ${applicantNumber + 1}...`);
           const previousInputCount = await page.locator(FILE_INPUT_SELECTOR).count();
           if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return false;
           if (!await waitForFileInputCount(page, previousInputCount + 1)) {
-            console.log("Add Applicant was clicked, but the next Webfile input did not appear. Guided booking stopped.");
+            log.warn("Add Applicant was clicked, but the next Webfile input did not appear.");
             return false;
           }
         }
@@ -1281,12 +1303,12 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
 
   const finalReport = await reportVisibleIssues(page);
   if (finalReport.issues.length > 0) {
-    console.log("Resolve the portal message before confirming applicant Webfiles.");
+    log.warn("Resolve the portal message before confirming applicant Webfiles.");
     return false;
   }
   const portalApplicantCount = getApplicantCount(finalReport.pageText);
   if (portalApplicantCount !== null && portalApplicantCount !== applicants.length) {
-    console.log(`The portal shows ${portalApplicantCount} applicant(s), but ${applicants.length} Webfile(s) were prepared. Guided booking stopped.`);
+    log.warn(`The portal shows ${portalApplicantCount} applicant(s), but ${applicants.length} Webfile(s) were prepared.`);
     return false;
   }
   if (portalApplicantCount === null && !await askYesNo(prompts, `Does the portal show all ${applicants.length} applicants with their correct Webfiles?`)) {
@@ -1303,23 +1325,23 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     "applicant confirmation",
   );
   if (!confirmButton.found) {
-    console.log("Could not uniquely identify the applicant confirmation button. Review the page and confirm manually.");
+    log.warn("Could not uniquely identify the applicant confirmation button. Review the page and confirm manually.");
     return false;
   }
   if (!await askYesNo(
     prompts,
     `Confirm the ${applicants.length} applicant Webfiles are correct and continue? This saves the Primary Webfile, which the portal says cannot be deleted or reuploaded.`,
   )) {
-    console.log("Applicant Webfile confirmation cancelled.");
+    log.info("Applicant Webfile confirmation cancelled.");
     return false;
   }
-  console.log("Clicking Confirm All Information is Correct...");
+  log.step("Confirm Applicants", "Confirming all applicant information with portal...");
   if (!await clickPortalControl(page, confirmButton.locator, { timeout: 5_000 })) return false;
 
   // Handle any confirmation popup/modal if present
   const dialogConfirm = page.locator('[role="dialog"] button, .modal button').filter({ hasText: /yes|confirm|proceed|ok|continue/i });
   if (await dialogConfirm.count().catch(() => 0) > 0 && await dialogConfirm.first().isVisible().catch(() => false)) {
-    console.log("Confirming portal dialog modal...");
+    log.info("Confirming portal dialog modal...");
     await clickPortalControl(page, dialogConfirm.first(), { timeout: 3_000 });
   }
 
@@ -1330,10 +1352,10 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     { locator: page.getByText(/appointment calendar|select appointment date/i) },
   ]);
   if (!bookingStepReady) {
-    console.log("Applicant confirmation was clicked, but the centre/date step did not appear. Guided booking stopped for review.");
+    log.warn("Applicant confirmation was clicked, but the centre/date step did not appear.");
     return false;
   }
-  console.log("Applicant confirmation complete. Arrived at IVAC Centre/date selection.");
+  log.success("Applicant Webfiles confirmed. Advancing to IVAC Centre selection.");
   return true;
 }
 
@@ -1490,21 +1512,21 @@ async function fillAndSubmitLogin(page, credentials) {
     try {
       const contactFilled = await setLoginInputValue(page, contactField, credentials.contactNumber);
       if (!contactFilled) {
-        console.warn("The contact-number field did not retain the typed value. Sign In was not clicked.");
+        log.warn("The contact-number field did not retain the typed value. Sign In was not clicked.");
         return { fieldsFilled: false, submitted: false };
       }
       const passwordFilled = await setLoginInputValue(page, passwordField, credentials.password);
       if (!passwordFilled) {
-        console.warn("The password field did not retain the typed value. Sign In was not clicked.");
+        log.warn("The password field did not retain the typed value. Sign In was not clicked.");
         return { fieldsFilled: false, submitted: false };
       }
 
-      console.log("Set the contact number and password into the visible sign-in fields.");
+      log.step("Sign In", "Entered contact number and password");
       let enabled = await submitButton.isEnabled().catch(() => false);
       let lastHeartbeat = 0;
       const enableDeadline = Date.now() + 60_000;
       if (!enabled) {
-        console.log("Credentials are filled. Complete Cloudflare/CAPTCHA in the browser; the helper is waiting for Sign In to become available.");
+        log.action("Credentials filled. Complete Cloudflare / CAPTCHA in browser to enable Sign In...");
         while (!page.isClosed() && Date.now() < enableDeadline) {
           if (!await waitForPortalNoticesClosed(page, 2_000)) {
             return { fieldsFilled: false, submitted: false };
@@ -1522,7 +1544,6 @@ async function fillAndSubmitLogin(page, credentials) {
           const now = Date.now();
           if (now - lastHeartbeat >= 30_000) {
             await reportVisibleIssues(page);
-            console.log("Still waiting for CAPTCHA or portal validation to enable Sign In.");
             lastHeartbeat = now;
           }
         }
@@ -1535,10 +1556,10 @@ async function fillAndSubmitLogin(page, credentials) {
       if (!await clickPortalControl(page, submitButton, { timeout: 5_000 })) {
         return { fieldsFilled: true, submitted: false };
       }
-      console.log("Clicked Sign In after verifying both fields.");
+      log.success("Clicked Sign In Now.");
       return { fieldsFilled: true, submitted: true };
     } catch (error) {
-      console.warn("Automatic sign-in could not complete: " + error.message);
+      log.warn("Automatic sign-in could not complete: " + error.message);
       return { fieldsFilled: false, submitted: false };
     }
   }
@@ -1761,12 +1782,11 @@ async function waitForNextOrWebfile(page, label) {
 export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   await unblockInspectAndPaste(page);
   await dismissPortalNotices(page);
-  console.log("Guided booking started. Each portal action waits for its next page/control state before the helper continues; CAPTCHA and OTP stay in the browser.");
 
   let current = await reportVisibleIssues(page);
   const alreadyAuthed = await isAlreadyLoggedIn(page);
   if (alreadyAuthed) {
-    console.log("Active session detected (already logged in).");
+    log.success("Active session detected (Already logged in).");
   }
 
   if (!await isActiveBookingStepReady(page) && !await isWebfileStepReady(page)) {
@@ -1790,10 +1810,10 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
     if (!await isAuthenticationPageVisible(page, current.pageText) && !await isActiveBookingStepReady(page) && !await isWebfileStepReady(page)) {
       const takeAppointment = await findTakeAppointmentControl(page);
       if (takeAppointment) {
-        console.log("Clicking Take Your Appointment...");
+        log.step("Appointment Entry", "Clicking Take Your Appointment");
         if (!await clickPortalControl(page, takeAppointment, { timeout: 5_000 })) return;
         if (!await waitForBookingStart(page)) {
-          console.log("The browser closed before the sign-in or booking page appeared.");
+          log.warn("The browser closed before the sign-in or booking page appeared.");
           return;
         }
       }
@@ -1804,6 +1824,7 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   if (await isAuthenticationPageVisible(page, current.pageText)) {
     let authOutcome;
     if (await isOtpPageVisible(page, current.pageText)) {
+      log.action("Enter the OTP in browser and click Verify OTP; helper will resume automatically.");
       authOutcome = await waitForOtpOrAuth(
         page,
         prompts,
@@ -1831,7 +1852,7 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
       }
 
       if (authOutcome === "otp") {
-        console.log("The Verify OTP page appeared. Enter the OTP and click Verify OTP in the browser; the helper will continue only after the authenticated booking page appears.");
+        log.action("The Verify OTP page appeared. Enter the OTP and click Verify OTP in browser.");
         authOutcome = await waitForOtpOrAuth(
           page,
           prompts,
@@ -1840,10 +1861,10 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
       }
     }
     if (authOutcome !== "authenticated") {
-      console.log("The browser closed before sign-in completed. No booking action was started.");
+      log.warn("Sign-in was not completed. Guided booking stopped.");
       return;
     }
-    console.log("Authentication completed; the booking page is ready.");
+    log.success("Authentication completed! Booking page is ready.");
   }
 
   await dismissPortalNotices(page);
@@ -1868,10 +1889,10 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
       takeAfterLogin = await findTakeAppointmentControl(page);
     }
     if (takeAfterLogin && !await isActiveBookingStepReady(page)) {
-      console.log("Clicking Take Your Appointment...");
+      log.step("Appointment Entry", "Clicking Take Your Appointment");
       if (!await clickPortalControl(page, takeAfterLogin, { timeout: 5_000 })) return;
       if (!await waitForBookingStart(page)) {
-        console.log("The browser closed before the booking entry page appeared.");
+        log.warn("The browser closed before the booking entry page appeared.");
         return;
       }
     }
@@ -1880,29 +1901,32 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   if (!await isWebfileStepReady(page)) {
     let navigation = await waitForBookingNavigation(page, "booking");
     if (navigation.type === "closed") {
-      console.log("The browser closed before the booking page became ready.");
+      log.warn("The browser closed before the booking page became ready.");
       return;
     }
     if (navigation.type === "next") {
+      log.step("Booking Guide", "Advancing through Next Step");
       if (navigation.control.ambiguous || !await clickNextStepIfPresent(page)) {
-        console.log("The Next Step control was ambiguous or the Webfile page did not appear. Guided booking stopped without starting an upload.");
+        log.warn("The Next Step control was ambiguous or the Webfile page did not appear.");
         return;
       }
     } else if (navigation.type === "book") {
       if (navigation.control.ambiguous) {
-        console.log("More than one Book Your Appointment control is visible. Guided booking stopped without clicking either one.");
+        log.warn("More than one Book Your Appointment control is visible.");
         return;
       }
       if (!await clickPortalControl(page, navigation.control.locator, { timeout: 5_000 })) return;
       navigation = await waitForNextOrWebfile(page, "the Next Step control or Webfile upload page");
       if (navigation.type === "closed") {
-        console.log("The browser closed before the Webfile upload page appeared.");
+        log.warn("The browser closed before the Webfile upload page appeared.");
         return;
       }
-      if (navigation.type === "next" &&
-        (navigation.control.ambiguous || !await clickNextStepIfPresent(page))) {
-        console.log("The Next Step control was ambiguous or the Webfile page did not appear. Guided booking stopped without starting an upload.");
-        return;
+      if (navigation.type === "next") {
+        log.step("Booking Guide", "Advancing through Next Step");
+        if (navigation.control.ambiguous || !await clickNextStepIfPresent(page)) {
+          log.warn("The Next Step control was ambiguous or the Webfile page did not appear.");
+          return;
+        }
       }
     }
   }
@@ -1913,7 +1937,7 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
       { locator: page.getByText(/upload primary applicant(?:'s|’s) webfile/i) },
     ]);
     if (!uploadReady) {
-      console.log("The browser closed before the Webfile upload page appeared.");
+      log.warn("The browser closed before the Webfile upload page appeared.");
       return;
     }
   }
@@ -1924,7 +1948,7 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
     return;
   }
   if (!await uploadApplicantPdfs(page, prompts, applicants)) {
-    console.log("Applicant Webfile upload/confirmation did not complete. Guided booking stopped.");
+    log.warn("Applicant Webfile upload/confirmation did not complete. Guided booking stopped.");
     return;
   }
 
@@ -1946,11 +1970,11 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
 
   const beforeSubmit = await reportVisibleIssues(page);
   if (beforeSubmit.issues.length > 0) {
-    console.log("Resolve the portal message before submitting the date. Guided booking stopped.");
+    log.warn("Resolve the portal message before submitting the date. Guided booking stopped.");
     return;
   }
   if (await isPaymentStepReady(page)) {
-    console.log("The portal is at payment. No payment action was taken.");
+    log.paymentStop();
     return;
   }
 
@@ -1962,7 +1986,7 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   );
   if (!proceed.found) {
     const reason = proceed.ambiguous ? "More than one submit/proceed control was found." : "No unique submit/proceed control was found.";
-    console.log(`${reason} The selected date has not been submitted by the helper. Review the portal and complete that step yourself if appropriate.`);
+    log.warn(`${reason} The selected date has not been submitted by the helper. Review the portal and complete that step yourself.`);
     return;
   }
 
@@ -1971,7 +1995,7 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
     `Submit the appointment selection for ${centre} on ${date} and continue to payment? The portal says confirmed bookings cannot be cancelled or rescheduled.`,
   );
   if (!approved) {
-    console.log("Appointment submission cancelled. No payment was made.");
+    log.info("Appointment submission cancelled. No payment was made.");
     return;
   }
 
@@ -1982,13 +2006,13 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
     { locator: page.getByText(/appointment (?:is )?confirmed|booking (?:is )?confirmed/i) },
   ]);
   if (!paymentStepReady) {
-    console.log("The date submission was clicked, but payment or confirmation did not appear. Guided booking stopped; inspect the portal before retrying.");
+    log.warn("The date submission was clicked, but payment or confirmation did not appear. Guided booking stopped; inspect the portal.");
     return;
   }
   const result = await reportVisibleIssues(page);
-  if (result.step.key === "payment") {
-    console.log("Reached the payment step. Payment was not made; complete it yourself if you want to confirm the appointment.");
+  if (result.step.key === "payment" || await isPaymentStepReady(page)) {
+    log.paymentStop();
   } else {
-    console.log(`Date submission action completed for ${date}. Review the current portal page before doing anything else.`);
+    log.success(`Date submission action completed for ${date}. Complete final review in browser.`);
   }
 }

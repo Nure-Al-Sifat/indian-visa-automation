@@ -4,6 +4,7 @@ import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { chromium } from "patchright";
 import { dismissPortalNotices, runGuidedBookingFlow } from "./booking.js";
+import { log } from "./logger.js";
 import {
   fillLabeledFields,
   getAvailabilityState,
@@ -109,82 +110,54 @@ function installBrowserErrorReporting(page, credentials) {
     if (message.type() !== "error") {
       return;
     }
-
-    const location = message.location();
-    const source = location.url
-      ? " (" + safeUrlForLog(location.url, credentials) +
-        (location.lineNumber ? ":" + location.lineNumber : "") + ")"
-      : "";
-    console.error(
-      "[Browser console error] " +
-        redactSensitiveText(message.text(), credentials) +
-        source,
-    );
+    const text = message.text();
+    // Filter non-essential tracking / font / analytics errors
+    if (/analytics|gtag|doubleclick|clarity|hotjar|favicon|fonts\.gstatic/i.test(text)) {
+      return;
+    }
+    log.warn(`Browser console: ${redactSensitiveText(text, credentials)}`);
   });
 
   page.on("pageerror", (error) => {
-    const stackLine = String(error.stack || "")
-      .split("\n")
-      .find((line) => /https?:\/\//.test(line));
-    const sourceUrl = stackLine?.match(/https?:\/\/[^\s)]+/)?.[0];
-    const source = sourceUrl
-      ? " (" + safeUrlForLog(sourceUrl, credentials) + ")"
-      : "";
-    console.error(
-      "[Browser page error] " +
-        redactSensitiveText(error.name + ": " + error.message, credentials) +
-        source,
-    );
+    const msg = error.message || "";
+    if (/ResizeObserver|Non-Error promise rejection/i.test(msg)) {
+      return;
+    }
+    log.error(`Browser script error: ${redactSensitiveText(msg, credentials)}`);
   });
 
   page.on("requestfailed", (request) => {
+    const url = request.url();
+    const resourceType = request.resourceType();
+    if (["image", "font", "stylesheet", "media"].includes(resourceType)) {
+      return;
+    }
+    if (/analytics|gtag|doubleclick|clarity|hotjar|google/i.test(url)) {
+      return;
+    }
     const failure = request.failure();
-    console.error(
-      "[Browser request failed] " +
-        request.method() + " " + safeUrlForLog(request.url(), credentials) +
-        " (" + redactSensitiveText(failure?.errorText || "unknown", credentials) + ")",
-    );
+    if (failure?.errorText === "net::ERR_ABORTED") {
+      return;
+    }
+    log.warn(`Request failed: ${request.method()} ${safeUrlForLog(url, credentials)} (${failure?.errorText || "unknown"})`);
   });
 }
 
 function printPageStatus(pageText, previous) {
   const step = getPortalStep(pageText);
   const availability = getAvailabilityState(pageText);
-  const issues = getPortalIssues(pageText);
 
   if (step.key !== previous.step) {
-    console.log(`\nPortal flow: ${step.label}. ${step.guidance}`);
+    log.step(step.label, step.guidance);
     previous.step = step.key;
   }
 
   if (availability === "possible" && previous.availability !== "possible") {
-    console.log(
-      "Possible appointment availability detected in the open page. Review the calendar yourself; no booking action was taken.",
-    );
-  } else if (
-    availability === "unavailable" &&
-    previous.availability !== "unavailable"
-  ) {
-    console.log(
-      "The open page indicates that no appointment slot may be available. Verify the live calendar yourself.",
-    );
-  } else if (
-    availability === "unknown" &&
-    previous.availability !== "unknown"
-  ) {
-    console.log(
-      "Appointment availability could not be determined from the visible page text.",
-    );
+    log.success("Possible appointment availability detected on page.");
+  } else if (availability === "unavailable" && previous.availability !== "unavailable") {
+    log.info("Page indicates no slot is currently available.");
   }
   previous.availability = availability;
-
-  const currentIssueKeys = new Set(issues.map(({ key }) => key));
-  for (const issue of issues) {
-    if (!previous.issues.has(issue.key)) {
-      console.warn(`\nPortal issue: ${issue.label}. ${issue.guidance}`);
-    }
-  }
-  previous.issues = currentIssueKeys;
 }
 
 function startPortalWatcher(page) {
@@ -200,7 +173,7 @@ function startPortalWatcher(page) {
       printPageStatus(await readPageText(page), previous);
     } catch (error) {
       if (!page.isClosed()) {
-        console.error(`Portal page check failed: ${error.message}`);
+        log.warn(`Portal page check failed: ${error.message}`);
       }
     } finally {
       checking = false;
@@ -246,36 +219,22 @@ async function main() {
   const prompts = readline.createInterface({ input: stdin, output: stdout });
 
   try {
+    log.banner("IVAC VISA BOOKING AUTOMATION", "Guided Flow • Stops Safely at Payment Step");
+    log.info(`Connecting to IVAC portal (${PORTAL_URL})...`);
     await page.goto(PORTAL_URL, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(500);
     await dismissPortalNotices(page);
-    console.log(
-      "The portal is open in a visible browser. Starting guided booking automatically from Take Your Appointment.",
-    );
-    console.log(
-      "Browser console errors, uncaught page errors, and failed requests will be shown here; credential values and URL paths are redacted.",
-    );
+
     if (credentials) {
-      console.log("Sign-in credentials will be filled from credentials.json.");
+      log.success("Sign-in credentials loaded from credentials.json");
     } else {
-      console.log("No usable credentials.json found; enter your contact number and password in the browser.");
+      log.info("Manual sign-in mode (credentials.json not found)");
     }
-    console.log(
-      "Complete Cloudflare/CAPTCHA and any OTP in the browser. The helper waits for each portal page transition automatically.",
-    );
-    console.log(
-      "The helper stops at payment. It will not enter OTP/CAPTCHA or make payments.",
-    );
-    console.log(
-      "The official FAQ gives a 15-minute limit for the full booking flow; keep the original Webfile and applicant details ready before starting.",
-    );
+
     try {
       await runGuidedBookingFlow(page, prompts, credentials);
     } catch (error) {
-      console.error("Guided booking stopped: " + error.message);
-      console.error(
-        "Review the visible portal page before retrying; the last action may already have taken effect.",
-      );
+      log.error("Guided booking stopped: " + error.message);
     }
     stopWatching = startPortalWatcher(page);
 
