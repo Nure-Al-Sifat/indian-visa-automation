@@ -35,6 +35,8 @@ npm start
 `
 .
 
+For development, run `npm run dev`. Nodemon restarts the helper when source files change.
+
 The browser profile is stored in 
 `
 user-data/

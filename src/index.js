@@ -96,7 +96,8 @@ function redactSensitiveText(value, credentials) {
 
 function safeUrlForLog(value, credentials) {
   try {
-    const url = new URL(value);
+    const cleanValue = String(value || "").replace(/:\d+:\d+$/, "");
+    const url = new URL(cleanValue);
     return redactSensitiveText(url.origin, credentials);
   } catch {
     return "unknown location";
@@ -216,6 +217,24 @@ async function main() {
     channel: "chrome",
     headless: false,
     args: ["--disable-quic"],
+  });
+
+  await context.addInitScript(() => {
+    const unblock = () => {
+      const allow = (e) => e.stopImmediatePropagation();
+      ["copy", "cut", "paste", "contextmenu"].forEach((eventType) => {
+        document.addEventListener(eventType, allow, true);
+        window.addEventListener(eventType, allow, true);
+      });
+      document.oncontextmenu = null;
+      document.onpaste = null;
+      document.oncopy = null;
+    };
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", unblock);
+    } else {
+      unblock();
+    }
   });
 
   const page = context.pages()[0] || (await context.newPage());
