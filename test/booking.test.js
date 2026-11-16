@@ -548,3 +548,103 @@ test("handles end-to-end flow: mission/centre -> waiting room -> time-slot -> de
     await rmdir(tempDir).catch(() => {});
   }
 });
+
+test("accurately handles live IVAC single reusable dropzone across multiple applicants without Add Applicant button", async () => {
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ivac-booking-reusable-dropzone-"));
+  const primaryPdf = path.join(tempDir, "primary-webfile.pdf");
+  const secondary2Pdf = path.join(tempDir, "secondary2-webfile.pdf");
+  const secondary3Pdf = path.join(tempDir, "secondary3-webfile.pdf");
+  try {
+    await writeFile(primaryPdf, "%PDF-1.4\nmock primary Webfile\n");
+    await writeFile(secondary2Pdf, "%PDF-1.4\nmock secondary 2 Webfile\n");
+    await writeFile(secondary3Pdf, "%PDF-1.4\nmock secondary 3 Webfile\n");
+    const page = await browser.newPage();
+    await page.setContent(`
+      <div id="root">
+        <header><button>Logout</button></header>
+        <main>
+          <div class="space-y-4">
+            <div class="text-2xl font-bold"><p>Total number of applicants: <span class="text-orange">0</span></p></div>
+            <div class="w-full">
+              <div class="border-dashed cursor-pointer">
+                <label id="dropzone-label">Upload Primary Applicant's Webfile<span class="text-red-500 ml-1">*</span></label>
+              </div>
+              <input id="reusable-file-input" type="file" accept=".pdf,application/pdf" class="hidden">
+            </div>
+            <div id="cf-turnstile">
+              <input type="hidden" name="cf-turnstile-response" id="turnstile-token" value="initial-token-1">
+            </div>
+            <button id="confirm-all-btn" class="bg-[#FF671F]" disabled="" type="button">
+              <span>Confirm All Information is Correct</span>
+            </button>
+            <input type="file" accept=".pdf,application/pdf" class="hidden">
+          </div>
+        </main>
+      </div>
+    `);
+
+    await page.evaluate(() => {
+      const fileInput = document.querySelector('#reusable-file-input');
+      const counter = document.querySelector('.text-orange');
+      const label = document.querySelector('#dropzone-label');
+      const turnstile = document.querySelector('#turnstile-token');
+      const confirmBtn = document.querySelector('#confirm-all-btn');
+      let currentApplicants = 0;
+
+      fileInput.addEventListener('change', () => {
+        currentApplicants += 1;
+        counter.textContent = String(currentApplicants);
+        // Live portal behavior: clears input value and updates dropzone label
+        fileInput.value = '';
+        label.textContent = "Upload Other Applicant's Webfile";
+        // Simulate Turnstile refresh
+        turnstile.value = `token-for-applicant-${currentApplicants + 1}`;
+        if (currentApplicants >= 3) {
+          confirmBtn.removeAttribute('disabled');
+        }
+      });
+
+      confirmBtn.addEventListener('click', () => {
+        window.reusableDropzoneConfirmed = true;
+        document.body.innerHTML = `
+          <label for="centre">Select IVAC Centre</label>
+          <select id="centre">
+            <option value="" disabled>Select Centre</option>
+            <option value="dhaka">Dhaka</option>
+          </select>
+          <label for="date">Appointment Date</label><input id="date" type="date">
+          <button id="submit">Proceed to Payment</button>
+        `;
+        document.querySelector('#submit').addEventListener('click', () => {
+          document.body.innerHTML = '<h1>Payment Details</h1><button>Pay Now</button>';
+        });
+      });
+    });
+
+    const prompts = {
+      async question(message) {
+        if (message.startsWith("How many applicants")) return "3";
+        if (message.startsWith("Path to Primary Applicant")) return primaryPdf;
+        if (message.startsWith("Path to Secondary Applicant 2")) return secondary2Pdf;
+        if (message.startsWith("Path to Secondary Applicant 3")) return secondary3Pdf;
+        if (message.startsWith("Upload these 3 original PDF")) return "y";
+        if (message.startsWith("Confirm the 3 applicant Webfiles")) return "y";
+        if (message.startsWith("Preferred available date")) return "2026-11-20";
+        if (message.startsWith("Submit the appointment selection")) return "y";
+        return "";
+      },
+    };
+
+    await runGuidedBookingFlow(page, prompts);
+
+    assert.equal(await page.evaluate(() => Boolean(window.reusableDropzoneConfirmed)), true, "Confirm All Information is Correct was clicked");
+    assert.equal(await page.locator("h1").innerText(), "Payment Details", "reached payment step safely with 3 applicants");
+  } finally {
+    await browser.close();
+    await unlink(primaryPdf).catch(() => {});
+    await unlink(secondary2Pdf).catch(() => {});
+    await unlink(secondary3Pdf).catch(() => {});
+    await rmdir(tempDir).catch(() => {});
+  }
+});

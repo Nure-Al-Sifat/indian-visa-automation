@@ -1,9 +1,25 @@
-import { open, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getPortalIssues, getPortalStep } from "./assistant.js";
 import { log } from "./logger.js";
 
 const FILE_INPUT_SELECTOR = 'input[type="file"]';
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const DOC_FILE_DIR = path.join(PROJECT_ROOT, "doc_file");
+const ADD_APPLICANT_LABELS = [
+  "Add Applicant",
+  "Add Another Applicant",
+  "Add Additional Applicant",
+  "Add New Applicant",
+  "Add Family Member",
+  "Add Secondary Applicant",
+  "Add Other Applicant",
+  "Add Webfile",
+  "Add Another Webfile",
+  "Add Additional Webfile",
+  "Add Secondary Webfile",
+];
 const lastVisibleIssuesByPage = new WeakMap();
 
 async function askYesNo(prompts, message) {
@@ -93,6 +109,50 @@ async function findUniqueControl(page, roles, exactNames) {
   }
 
   return { found: false, ambiguous: false };
+}
+
+async function findAddApplicantControl(page) {
+  const named = await findUniqueControl(page, ["button", "link"], ADD_APPLICANT_LABELS);
+  if (named.found || named.ambiguous) {
+    return named;
+  }
+
+  const controls = page.locator('button, a, [role="button"]');
+  const count = await controls.count().catch(() => 0);
+  const matches = [];
+  for (let index = 0; index < count; index += 1) {
+    const control = controls.nth(index);
+    if (!await control.isVisible().catch(() => false) || !await control.isEnabled().catch(() => false)) {
+      continue;
+    }
+    const info = await control.evaluate((element) => {
+      const directLabel = [
+        element.getAttribute("aria-label") || "",
+        element.getAttribute("title") || "",
+        element.innerText || "",
+        element.textContent || "",
+      ].join(" ").replace(/\s+/g, " ").trim();
+      let ancestor = element.parentElement;
+      let context = "";
+      for (let depth = 0; ancestor && depth < 4; depth += 1, ancestor = ancestor.parentElement) {
+        const text = (ancestor.innerText || "").replace(/\s+/g, " ").trim();
+        if (text.length > 0 && text.length < 400) {
+          context += ` ${text}`;
+        }
+      }
+      return { directLabel, context };
+    }).catch(() => ({ directLabel: "", context: "" }));
+    const looksLikeAddControl = /\b(?:add|plus)\b|^\s*\+/i.test(info.directLabel);
+    const mentionsApplicantSlot = /applicant|web\s*file|secondary|family member/i.test(`${info.directLabel} ${info.context}`);
+    if (looksLikeAddControl && mentionsApplicantSlot) {
+      matches.push(control);
+    }
+  }
+
+  if (matches.length === 1) {
+    return { found: true, locator: matches[0], label: "Add applicant" };
+  }
+  return { found: false, ambiguous: matches.length > 1 };
 }
 
 export async function findTakeAppointmentControl(page) {
@@ -624,7 +684,99 @@ async function getPdfPath(prompts, applicantLabel) {
   }
 }
 
-async function getApplicantPdfs(prompts) {
+function sortDocFilePdfs(entries) {
+  const pdfEntries = entries.filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === ".pdf");
+  const primary = pdfEntries.find((entry) => /^01(?:$|[\s._-])/i.test(entry.name));
+  if (!primary) {
+    return [];
+  }
+
+  const numberPrefix = (name) => {
+    const match = name.match(/^\s*(\d+)(?=$|[\s._-])/);
+    return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+  };
+  const secondary = pdfEntries.filter((entry) => entry !== primary).sort((left, right) => {
+    const difference = numberPrefix(left.name) - numberPrefix(right.name);
+    return difference || left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+  });
+  return [primary, ...secondary];
+}
+
+async function getDocFolderApplicants(docFolder, files) {
+  const applicants = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const filePath = path.join(docFolder, files[index].name);
+    const label = index === 0 ? "Primary Applicant" : `Secondary Applicant ${index + 1}`;
+    const fileInfo = await stat(filePath);
+    if (fileInfo.size > 500 * 1024) {
+      throw new Error(`${files[index].name} exceeds the portal's 500 KB limit.`);
+    }
+    const handle = await open(filePath, "r");
+    let header;
+    let bytesRead = 0;
+    try {
+      header = Buffer.alloc(5);
+      ({ bytesRead } = await handle.read(header, 0, header.length, 0));
+    } finally {
+      await handle.close();
+    }
+    if (bytesRead < 5 || header.toString("ascii") !== "%PDF-") {
+      throw new Error(`${files[index].name} does not appear to be a PDF.`);
+    }
+    applicants.push({ path: filePath, size: fileInfo.size, label });
+  }
+  return applicants;
+}
+
+async function getApplicantPdfs(prompts, { autoUseDocFolder = false, docFolder = DOC_FILE_DIR } = {}) {
+  let detectedFiles = [];
+  if (autoUseDocFolder) {
+    let docFolderEntries = [];
+    try {
+      docFolderEntries = await readdir(docFolder, { withFileTypes: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.log(`Could not read ${docFolder}: ${error.message}`);
+      }
+    }
+    detectedFiles = sortDocFilePdfs(docFolderEntries);
+  }
+
+  if (detectedFiles.length > 0) {
+    console.log(`PDFs found in ${docFolder} (01 is Primary Applicant):`);
+    detectedFiles.forEach((file, index) => console.log(`  ${index + 1}. ${file.name}`));
+    if (detectedFiles.length > 4) {
+      console.log("doc_file contains more than four PDFs. Keep only the applicants for this booking, then restart.");
+      return null;
+    }
+    if (autoUseDocFolder || await askYesNo(prompts, `Use these ${detectedFiles.length} PDFs in this order?`)) {
+      let applicants;
+      try {
+        applicants = await getDocFolderApplicants(docFolder, detectedFiles);
+      } catch (error) {
+        console.log(`Cannot use the PDFs in doc_file: ${error.message}`);
+        return null;
+      }
+      console.log("Webfiles prepared in upload order:");
+      applicants.forEach((applicant, index) => {
+        console.log(`  ${index + 1}. ${applicant.label}: ${path.basename(applicant.path)} (${Math.ceil(applicant.size / 1024)} KB)`);
+      });
+      if (!autoUseDocFolder && !await askYesNo(
+        prompts,
+        `Upload these ${applicants.length} original PDF(s) to appointment.ivacbd.com? The portal says the Primary Webfile cannot be deleted or reuploaded once selected.`,
+      )) {
+        console.log("Webfile upload cancelled before selecting any file.");
+        return null;
+      }
+      return applicants;
+    }
+  }
+
+  if (autoUseDocFolder) {
+    console.log("No Primary PDF starting with 01 was found in doc_file; guided upload stopped.");
+    return null;
+  }
+
   let applicantCount;
   while (true) {
     applicantCount = Number((await prompts.question("How many applicants are in this booking? (1-4): ")).trim());
@@ -686,27 +838,39 @@ async function getFileInputDetails(page) {
         label = siblingLabel.innerText.trim();
       } else {
         const prevText = sibling.innerText || "";
-        if (/upload\s+(?:primary|secondary|additional|applicant).*web\s*file/i.test(prevText)) {
+        if (/upload\s+(?:primary|secondary|other|additional|applicant).*web\s*file|ওয়েবফাইল/i.test(prevText)) {
           label = prevText.trim();
         }
       }
     }
     if (!label && element.parentElement) {
-      const parent = element.parentElement;
-      if (parent.classList.contains("w-full") && !parent.classList.contains("space-y-4")) {
-        const parentLabel = parent.querySelector("label");
-        if (parentLabel) {
-          label = parentLabel.innerText.trim();
+      let ancestor = element.parentElement;
+      for (let depth = 0; ancestor && depth < 4 && !label; depth += 1, ancestor = ancestor.parentElement) {
+        const ancestorLabels = Array.from(ancestor.querySelectorAll("label"))
+          .map((candidate) => candidate.innerText.trim())
+          .filter(Boolean);
+        const uploadLabels = ancestorLabels.filter((text) =>
+          /upload.*(?:primary|secondary|other|additional|applicant).*web\s*file|ওয়েবফাইল/i.test(text),
+        );
+        if (uploadLabels.length === 1) {
+          label = uploadLabels[0];
+        } else if (ancestorLabels.length === 1 && ancestorLabels[0].length < 160) {
+          label = ancestorLabels[0];
         }
       }
     }
 
     // Identify dangling/auxiliary hidden file inputs (e.g. inputs after action buttons without upload labels)
+    // Only treat a post-confirmation hidden input as auxiliary.
     const isDangling = Boolean(
       element.previousElementSibling &&
-      (element.previousElementSibling.tagName === "BUTTON" ||
-       /confirm/i.test(element.previousElementSibling.innerText || ""))
+      /confirm|নিশ্চিত/i.test(element.previousElementSibling.innerText || "")
     );
+
+    if (!element.__ivacUploadInputIdentity) {
+      window.__ivacUploadInputSequence = (window.__ivacUploadInputSequence || 0) + 1;
+      element.__ivacUploadInputIdentity = `ivac-file-input-${window.__ivacUploadInputSequence}`;
+    }
 
     return {
       index: index + 1,
@@ -714,8 +878,9 @@ async function getFileInputDetails(page) {
       id,
       label,
       isDangling,
+      disabled: Boolean(element.disabled),
       selected: Boolean(element.files && element.files.length),
-      identity: id ? `id:${id}` : `input:${name}|index:${index + 1}`,
+      identity: element.__ivacUploadInputIdentity,
     };
   }));
 }
@@ -724,33 +889,69 @@ async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
   const inputLocator = page.locator(FILE_INPUT_SELECTOR);
   let details = await getFileInputDetails(page);
   const isPrimary = applicantNumber === 1;
+
+  // Filter out dangling/auxiliary inputs (e.g. trailing inputs after confirm buttons)
+  const nonDangling = details.filter((item) => !item.isDangling);
+
+  // Case 1: Live IVAC single dropzone reuse
+  // When there is only 1 non-dangling file input on the page, the portal reuses it across all applicants
+  if (nonDangling.length === 1) {
+    const single = nonDangling[0];
+    return {
+      locator: inputLocator.nth(single.index - 1),
+      identity: single.identity,
+    };
+  }
+
+  // Case 2: Multi-input portal (e.g. separate file input slots or tests)
   const matchesApplicant = (item) => {
     if (item.isDangling) return false;
     const description = `${item.label} ${item.name} ${item.id}`;
     if (isPrimary) {
-      return /primary.{0,30}web ?file/i.test(description) || (!item.label && applicantNumber === 1);
+      return /primary|প্রাথমিক/i.test(description) || (!item.label && applicantNumber === 1);
     }
-    return new RegExp(`(?:secondary|applicant\\s*${applicantNumber}|additional|web ?file)`, "i").test(description) && !/primary/i.test(description);
+    if (/primary|প্রাথমিক/i.test(description)) return false;
+    const explicitApplicant = description.match(/(?:secondary|applicant|web\s*file)\s*(?:applicant\s*)?(\d+)/i);
+    if (explicitApplicant && Number(explicitApplicant[1]) !== applicantNumber) {
+      return false;
+    }
+    return /secondary|other|additional|web\s*file|আবেদনকারী|ওয়েবফাইল/i.test(description);
   };
-  const availableInputs = () => details.filter((item) => !item.selected && !usedInputs.has(item.identity));
+
+  const availableInputs = () => details.filter((item) =>
+    !item.selected && !item.isDangling && (!usedInputs.has(item.identity) || matchesApplicant(item)),
+  );
   let candidates = availableInputs();
   let labelledCandidates = candidates.filter(matchesApplicant);
 
   if (labelledCandidates.length === 1) {
     return { locator: inputLocator.nth(labelledCandidates[0].index - 1), identity: labelledCandidates[0].identity };
   }
-  const nonDangling = candidates.filter((item) => !item.isDangling);
-  if (isPrimary && nonDangling.length === 1) {
-    return { locator: inputLocator.nth(nonDangling[0].index - 1), identity: nonDangling[0].identity };
-  }
-  if (!isPrimary && nonDangling.length >= 1 && labelledCandidates.length === 0) {
-    return { locator: inputLocator.nth(nonDangling[0].index - 1), identity: nonDangling[0].identity };
+  if (!isPrimary && labelledCandidates.length > 1) {
+    const exactApplicant = labelledCandidates.filter((item) => {
+      const description = `${item.label} ${item.name} ${item.id}`;
+      const match = description.match(/(?:secondary|applicant|web\s*file)\s*(?:applicant\s*)?(\d+)/i);
+      return match && Number(match[1]) === applicantNumber;
+    });
+    const unnumberedSecondary = labelledCandidates.filter((item) =>
+      !/(?:secondary|applicant|web\s*file)\s*(?:applicant\s*)?\d+/i.test(`${item.label} ${item.name} ${item.id}`),
+    );
+    const selected = exactApplicant.length === 1 ? exactApplicant[0] : unnumberedSecondary[0];
+    if (selected) {
+      return { locator: inputLocator.nth(selected.index - 1), identity: selected.identity };
+    }
   }
 
-  if (!isPrimary && nonDangling.length === 0) {
-    const addApplicant = await findUniqueControl(page, ["button", "link"], [
-      "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
-    ]);
+  const validNonDangling = candidates.filter((item) => !item.isDangling && (isPrimary || !/primary|প্রাথমিক/i.test(`${item.label} ${item.name} ${item.id}`)));
+  if (isPrimary && validNonDangling.length === 1) {
+    return { locator: inputLocator.nth(validNonDangling[0].index - 1), identity: validNonDangling[0].identity };
+  }
+  if (!isPrimary && validNonDangling.length >= 1 && labelledCandidates.length === 0) {
+    return { locator: inputLocator.nth(validNonDangling[0].index - 1), identity: validNonDangling[0].identity };
+  }
+
+  if (!isPrimary && validNonDangling.length === 0) {
+    const addApplicant = await findAddApplicantControl(page);
     if (addApplicant.found) {
       const previousInputCount = await inputLocator.count();
       if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return null;
@@ -764,51 +965,10 @@ async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
       if (labelledCandidates.length === 1) {
         return { locator: inputLocator.nth(labelledCandidates[0].index - 1), identity: labelledCandidates[0].identity };
       }
-      const freshNonDangling = candidates.filter((item) => !item.isDangling);
+      const freshNonDangling = candidates.filter((item) => !item.isDangling && !/primary|প্রাথমিক/i.test(`${item.label} ${item.name} ${item.id}`));
       if (freshNonDangling.length >= 1) {
         return { locator: inputLocator.nth(freshNonDangling[0].index - 1), identity: freshNonDangling[0].identity };
       }
-    }
-  }
-
-  if (candidates.length === 0) {
-    const label = isPrimary ? "Primary Applicant's Webfile" : `Secondary Applicant ${applicantNumber}'s Webfile`;
-    console.log(`Waiting for an empty ${label} file input. The helper will not replace a previously selected applicant file.`);
-    let lastHeartbeat = 0;
-    let addAttempted = false;
-    while (!page.isClosed()) {
-      if (!await waitForPortalNoticesClosed(page)) {
-        return null;
-      }
-      details = await getFileInputDetails(page);
-      candidates = availableInputs();
-      labelledCandidates = candidates.filter(matchesApplicant);
-      if (labelledCandidates.length === 1 || candidates.length > 0) {
-        break;
-      }
-      if (!isPrimary && !addAttempted) {
-        const addApplicant = await findUniqueControl(page, ["button", "link"], [
-          "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
-        ]);
-        if (addApplicant.found) {
-          addAttempted = true;
-          const previousInputCount = await inputLocator.count();
-          if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return null;
-          if (!await waitForFileInputCount(page, previousInputCount + 1)) {
-            return null;
-          }
-          continue;
-        }
-      }
-      const now = Date.now();
-      if (now - lastHeartbeat >= 30_000) {
-        console.log(`Still waiting for an empty file input for ${label}.`);
-        lastHeartbeat = now;
-      }
-      await page.waitForTimeout(300).catch(() => {});
-    }
-    if (page.isClosed()) {
-      return null;
     }
   }
 
@@ -830,6 +990,12 @@ async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
       return { locator: inputLocator.nth(selected.index - 1), identity: selected.identity };
     }
   }
+
+  // Fallback for single non-dangling input
+  if (nonDangling.length >= 1) {
+    return { locator: inputLocator.nth(nonDangling[0].index - 1), identity: nonDangling[0].identity };
+  }
+
   console.log(`No safe file input was identified for applicant ${applicantNumber}.`);
   return null;
 }
@@ -1116,7 +1282,9 @@ async function completeConsentIfNeeded(page, prompts) {
 }
 
 async function waitForCaptchaIfNeeded(page) {
-  const captcha = page.locator('iframe[title*="captcha" i], iframe[src*="captcha" i], .g-recaptcha, [data-sitekey]');
+  const captcha = page.locator(
+    'iframe[title*="captcha" i], iframe[src*="captcha" i], iframe[src*="turnstile" i], .g-recaptcha, .cf-turnstile, [data-sitekey], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]',
+  );
   if (await captcha.count() === 0) {
     return true;
   }
@@ -1220,9 +1388,124 @@ async function waitForApplicantCount(page, expectedCount, timeout = 45_000) {
   return null;
 }
 
-async function uploadApplicantPdfs(page, prompts, applicants) {
+async function waitForNextApplicantSlot(page, currentApplicantNumber, previousInputCount, usedInputs, timeout = 25_000) {
+  const nextApplicantNumber = currentApplicantNumber + 1;
+  const deadline = Date.now() + timeout;
+  let lastHeartbeat = 0;
+  let addAttempted = false;
+  while (!page.isClosed() && Date.now() < deadline) {
+    if (!await waitForPortalNoticesClosed(page, 2_000)) {
+      return false;
+    }
+
+    // Check if an "Add Applicant" button exists and needs to be clicked (e.g. test mocks / variant UI)
+    if (!addAttempted) {
+      const addControl = await findAddApplicantControl(page);
+      if (addControl.found) {
+        log.info(`Adding the upload slot for Secondary Applicant ${nextApplicantNumber}...`);
+        if (await clickPortalControl(page, addControl.locator, { timeout: 5_000 })) {
+          addAttempted = true;
+          await page.waitForTimeout(400);
+          continue;
+        }
+      }
+    }
+
+    const details = await getFileInputDetails(page);
+    const nonDangling = details.filter((item) => !item.isDangling);
+
+    // Case 1: Single dropzone (Live IVAC portal)
+    if (nonDangling.length === 1) {
+      const input = nonDangling[0];
+      const dropzoneText = await page.locator('.border-dashed, [class*="border-dashed"]').first().innerText().catch(() => "");
+      const isLoading = /loading/i.test(dropzoneText);
+
+      // Check Turnstile token readiness if Turnstile widget is present
+      const turnstileInput = page.locator('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+      let turnstileReady = true;
+      if (await turnstileInput.count().catch(() => 0) > 0) {
+        const val = await turnstileInput.first().inputValue().catch(() => "");
+        turnstileReady = Boolean(val && val.trim().length > 0);
+      }
+
+      if (!input.disabled && !isLoading && turnstileReady) {
+        log.info(`Portal is ready for Secondary Applicant ${nextApplicantNumber}.`);
+        return true;
+      }
+    }
+
+    // Case 2: Multi-input form (Test mocks or separate applicant inputs)
+    if (nonDangling.length > 1) {
+      const text = await page.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      const pageShowsSecondarySlot = /upload\s+(?:(?:secondary|additional|other)\s+applicant|secondary|additional)|add\s+(?:another|additional|new)?\s*applicant|অন্য আবেদনকারী/i.test(text);
+      const hasUsableNextInput = nonDangling.some((item) => {
+        if (item.selected) return false;
+        const description = `${item.label} ${item.name} ${item.id}`;
+        const slotNumberMatch = description.match(/(?:secondary|applicant|web\s*file)\s*(?:applicant\s*)?(\d+)/i);
+        const correctNumber = !slotNumberMatch || Number(slotNumberMatch[1]) === nextApplicantNumber;
+        const explicitlySecondary = correctNumber && (/secondary|additional|other\s+applicant|web\s*file|আবেদনকারী/i.test(description) ||
+          new RegExp(`applicant\\s*${nextApplicantNumber}\\b`, "i").test(description));
+        const newlyAddedInput = !usedInputs.has(item.identity) && item.index > previousInputCount;
+        const portalReusedInput = usedInputs.has(item.identity) && explicitlySecondary && pageShowsSecondarySlot;
+        return explicitlySecondary || newlyAddedInput || portalReusedInput;
+      });
+      if (hasUsableNextInput) {
+        log.info(`Portal is ready for Secondary Applicant ${nextApplicantNumber}.`);
+        return true;
+      }
+    }
+
+    const now = Date.now();
+    if (now - lastHeartbeat >= 5_000) {
+      log.info(`Waiting for portal dropzone / CAPTCHA checks for applicant ${nextApplicantNumber}...`);
+      lastHeartbeat = now;
+    }
+    await page.waitForTimeout(300).catch(() => {});
+  }
+
+  // Fallback: if at least 1 non-dangling input exists, proceed
+  const finalDetails = await getFileInputDetails(page);
+  const finalNonDangling = finalDetails.filter((item) => !item.isDangling);
+  if (finalNonDangling.length >= 1) {
+    log.info(`Portal is ready for Secondary Applicant ${nextApplicantNumber}.`);
+    return true;
+  }
+
+  log.warn(`No usable Secondary Applicant ${nextApplicantNumber} file input appeared. Current file inputs: ${finalDetails.map((item) => `#${item.index} ${item.label || item.name || item.id || "unlabelled"}`).join("; ") || "none"}.`);
+  return false;
+}
+
+async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmApplicants = false } = {}) {
   const usedInputs = new Set();
-  for (let index = 0; index < applicants.length; index += 1) {
+  const currentPageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+  const alreadyUploaded = getApplicantCount(currentPageText) ?? 0;
+  if (alreadyUploaded > applicants.length) {
+    log.warn(`The portal already shows ${alreadyUploaded} applicants, but only ${applicants.length} PDFs were found in doc_file.`);
+    return false;
+  }
+  if (alreadyUploaded > 0) {
+    log.info(`The portal already shows ${alreadyUploaded} applicant(s); continuing with the next Webfile.`);
+    const existingInputs = (await getFileInputDetails(page)).filter((item) => !item.isDangling);
+    for (const item of existingInputs) {
+      const description = `${item.label} ${item.name} ${item.id}`;
+      if (/secondary|additional|other/i.test(description)) {
+        continue;
+      }
+      usedInputs.add(item.identity);
+      if (usedInputs.size >= alreadyUploaded) {
+        break;
+      }
+    }
+    if (alreadyUploaded < applicants.length) {
+      const currentInputCount = await page.locator(FILE_INPUT_SELECTOR).count().catch(() => 0);
+      if (!await waitForNextApplicantSlot(page, alreadyUploaded, currentInputCount, usedInputs)) {
+        log.warn(`The portal did not show a ready upload slot for applicant ${alreadyUploaded + 1}.`);
+        return false;
+      }
+    }
+  }
+
+  for (let index = alreadyUploaded; index < applicants.length; index += 1) {
     const applicant = applicants[index];
     const applicantNumber = index + 1;
     log.step("Webfile Upload", `Preparing applicant ${applicantNumber} of ${applicants.length} (${applicant.label}): ${path.basename(applicant.path)}`);
@@ -1234,16 +1517,27 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     }
 
     if (!await waitForPortalNoticesClosed(page)) return false;
-    await fileInput.locator.setInputFiles(applicant.path);
+    const inputCountBeforeUpload = await page.locator(FILE_INPUT_SELECTOR).count().catch(() => 0);
+    try {
+      await fileInput.locator.setInputFiles(applicant.path);
+    } catch (error) {
+      log.warn(`Could not attach ${path.basename(applicant.path)} to the ${applicant.label} upload control: ${error.message}`);
+      return false;
+    }
     usedInputs.add(fileInput.identity);
+    log.info(`Attached ${path.basename(applicant.path)}; waiting for the portal to confirm ${applicant.label}.`);
 
     const uploadControls = ["Upload Webfile", "Upload"].map((name) => page.getByRole("button", { name, exact: true }));
     let uploadControlExists = false;
     for (const locator of uploadControls) {
-      if (await locator.count().catch(() => 0) > 0) {
-        uploadControlExists = true;
-        break;
+      const count = await locator.count().catch(() => 0);
+      for (let controlIndex = 0; controlIndex < count; controlIndex += 1) {
+        if (await locator.nth(controlIndex).isVisible().catch(() => false)) {
+          uploadControlExists = true;
+          break;
+        }
       }
+      if (uploadControlExists) break;
     }
     if (uploadControlExists) {
       const uploadAction = await waitForUniqueControlUntilReady(
@@ -1282,21 +1576,9 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     log.success(`Applicant ${applicantNumber} (${applicant.label}) confirmed. Count: ${acceptedCount}.`);
 
     if (index + 1 < applicants.length) {
-      const details = await getFileInputDetails(page);
-      const nonDangling = details.filter((item) => !item.isDangling);
-      if (nonDangling.length <= applicantNumber) {
-        const addApplicant = await findUniqueControl(page, ["button", "link"], [
-          "Add Applicant", "Add Another Applicant", "Add Secondary Applicant", "Add Webfile", "Add Another Webfile", "Add Additional Webfile",
-        ]);
-        if (addApplicant.found) {
-          log.info(`Adding input slot for applicant ${applicantNumber + 1}...`);
-          const previousInputCount = await page.locator(FILE_INPUT_SELECTOR).count();
-          if (!await clickPortalControl(page, addApplicant.locator, { timeout: 5_000 })) return false;
-          if (!await waitForFileInputCount(page, previousInputCount + 1)) {
-            log.warn("Add Applicant was clicked, but the next Webfile input did not appear.");
-            return false;
-          }
-        }
+      if (!await waitForNextApplicantSlot(page, applicantNumber, inputCountBeforeUpload, usedInputs)) {
+        log.warn(`The portal did not show a ready upload slot for applicant ${applicantNumber + 1}.`);
+        return false;
       }
     }
   }
@@ -1311,8 +1593,14 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     log.warn(`The portal shows ${portalApplicantCount} applicant(s), but ${applicants.length} Webfile(s) were prepared.`);
     return false;
   }
-  if (portalApplicantCount === null && !await askYesNo(prompts, `Does the portal show all ${applicants.length} applicants with their correct Webfiles?`)) {
-    return false;
+  if (portalApplicantCount === null) {
+    if (autoConfirmApplicants) {
+      log.warn("The portal applicant count could not be read, so the helper will not confirm the Webfiles automatically.");
+      return false;
+    }
+    if (!await askYesNo(prompts, `Does the portal show all ${applicants.length} applicants with their correct Webfiles?`)) {
+      return false;
+    }
   }
 
   // Check if Turnstile is running on the Webfile page
@@ -1328,7 +1616,7 @@ async function uploadApplicantPdfs(page, prompts, applicants) {
     log.warn("Could not uniquely identify the applicant confirmation button. Review the page and confirm manually.");
     return false;
   }
-  if (!await askYesNo(
+  if (!autoConfirmApplicants && !await askYesNo(
     prompts,
     `Confirm the ${applicants.length} applicant Webfiles are correct and continue? This saves the Primary Webfile, which the portal says cannot be deleted or reuploaded.`,
   )) {
@@ -1779,7 +2067,7 @@ async function waitForNextOrWebfile(page, label) {
   return { type: "closed" };
 }
 
-export async function runGuidedBookingFlow(page, prompts, credentials = null) {
+export async function runGuidedBookingFlow(page, prompts, credentials = null, flowOptions = {}) {
   await unblockInspectAndPaste(page);
   await dismissPortalNotices(page);
 
@@ -1943,11 +2231,11 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null) {
   }
   current = await reportVisibleIssues(page);
 
-  const applicants = await getApplicantPdfs(prompts);
+  const applicants = await getApplicantPdfs(prompts, flowOptions);
   if (!applicants) {
     return;
   }
-  if (!await uploadApplicantPdfs(page, prompts, applicants)) {
+  if (!await uploadApplicantPdfs(page, prompts, applicants, flowOptions)) {
     log.warn("Applicant Webfile upload/confirmation did not complete. Guided booking stopped.");
     return;
   }

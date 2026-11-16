@@ -232,7 +232,10 @@ async function main() {
     }
 
     try {
-      await runGuidedBookingFlow(page, prompts, credentials);
+      await runGuidedBookingFlow(page, prompts, credentials, {
+        autoUseDocFolder: true,
+        autoConfirmApplicants: true,
+      });
     } catch (error) {
       log.error("Guided booking stopped: " + error.message);
     }
