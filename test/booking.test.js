@@ -648,3 +648,92 @@ test("accurately handles live IVAC single reusable dropzone across multiple appl
     await rmdir(tempDir).catch(() => {});
   }
 });
+
+test("accurately detects and clicks Save & Continue in live IVAC details confirmation modal", async () => {
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ivac-booking-modal-"));
+  const primaryPdf = path.join(tempDir, "01 primary-webfile.pdf");
+  const secondary2Pdf = path.join(tempDir, "02 secondary2-webfile.pdf");
+  const secondary3Pdf = path.join(tempDir, "03 secondary3-webfile.pdf");
+
+  try {
+    await writeFile(primaryPdf, "%PDF-1.4 mock pdf");
+    await writeFile(secondary2Pdf, "%PDF-1.4 mock pdf");
+    await writeFile(secondary3Pdf, "%PDF-1.4 mock pdf");
+
+    const page = await browser.newPage();
+    await page.setContent(`
+      <div id="root">
+        <header><a href="/profile">Profile</a></header>
+        <main>
+          <div class="text-2xl font-bold text-gray-500">
+            <p>Total number of applicants: <span class="text-orange">3</span></p>
+          </div>
+          <div><span>Primary Applicant</span><span>PARIMAL CHOWDHURY</span></div>
+          <div><span>Applicant 02</span><span>MENOTY CHOWDHURY</span></div>
+          <div><span>Applicant 03</span><span>MD ALAMIN</span></div>
+          <input type="file" accept=".pdf,application/pdf" class="hidden">
+          <button id="confirm-all-btn" class="bg-[#FF671F]" disabled="" type="button">
+            <span>Confirm All Information is Correct</span>
+          </button>
+          <!-- Live IVAC Confirmation Modal -->
+          <div class="fixed inset-0 z-50 flex items-center justify-center p-4" id="details-modal">
+            <div class="relative w-full max-w-[693px] bg-white rounded-3xl p-8 shadow-2xl">
+              <h2>Please confirm your details</h2>
+              <p>Make sure all the information is correct before saving and continuing.</p>
+              <button id="save-continue-btn" class="bg-[#FF671F] w-full flex items-center justify-center" type="button">
+                <span>Save & Continue</span>
+              </button>
+              <button id="go-back-btn">Go Back</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    `);
+
+    await page.evaluate(() => {
+      const saveBtn = document.querySelector("#save-continue-btn");
+      saveBtn.addEventListener("click", () => {
+        window.saveAndContinueClicked = true;
+        // Simulate navigation to IVAC Centre selection
+        document.body.innerHTML = `
+          <label for="centre">Select IVAC Centre</label>
+          <select id="centre">
+            <option value="" disabled>Select Centre</option>
+            <option value="dhaka">Dhaka</option>
+          </select>
+          <label for="date">Appointment Date</label><input id="date" type="date">
+          <button id="submit">Proceed to Payment</button>
+        `;
+        document.querySelector("#submit").addEventListener("click", () => {
+          document.body.innerHTML = '<h1>Payment Details</h1><button>Pay Now</button>';
+        });
+      });
+    });
+
+    const prompts = {
+      async question(message) {
+        if (message.startsWith("How many applicants")) return "3";
+        if (message.startsWith("Path to Primary Applicant")) return primaryPdf;
+        if (message.startsWith("Path to Secondary Applicant 2")) return secondary2Pdf;
+        if (message.startsWith("Path to Secondary Applicant 3")) return secondary3Pdf;
+        if (message.startsWith("Upload these 3 original PDF")) return "y";
+        if (message.startsWith("Confirm the 3 applicant Webfiles")) return "y";
+        if (message.startsWith("Preferred available date")) return "2026-11-20";
+        if (message.startsWith("Submit the appointment selection")) return "y";
+        return "";
+      },
+    };
+
+    await runGuidedBookingFlow(page, prompts);
+
+    assert.equal(await page.evaluate(() => Boolean(window.saveAndContinueClicked)), true, "Save & Continue was clicked");
+    assert.equal(await page.locator("h1").innerText(), "Payment Details", "reached payment step safely from modal");
+  } finally {
+    await browser.close();
+    await unlink(primaryPdf).catch(() => {});
+    await unlink(secondary2Pdf).catch(() => {});
+    await unlink(secondary3Pdf).catch(() => {});
+    await rmdir(tempDir).catch(() => {});
+  }
+});

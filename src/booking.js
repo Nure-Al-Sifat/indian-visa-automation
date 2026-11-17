@@ -493,6 +493,8 @@ async function isWebfileStepReady(page) {
   return waitForAnyState([
     { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
     { locator: page.getByText(/upload primary applicant(?:'s|’s) webfile/i) },
+    { locator: page.getByRole("button", { name: /save\s*&\s*continue|save\s+and\s+continue/i }) },
+    { locator: page.getByRole("heading", { name: /please confirm your details/i }) },
   ], 100);
 }
 
@@ -505,6 +507,8 @@ async function isActiveBookingStepReady(page) {
     { locator: page.getByRole("link", { name: /next step/i }) },
     { locator: page.locator('a, button, [role="button"]').filter({ hasText: /next step/i }) },
     { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    { locator: page.getByRole("button", { name: /save\s*&\s*continue|save\s+and\s+continue/i }) },
+    { locator: page.getByRole("heading", { name: /please confirm your details/i }) },
     { locator: page.getByLabel(/select ivac cent(?:re|er)/i) },
     { locator: page.locator('input[type="date"]'), state: "visible" },
     { locator: page.getByRole("button", { name: /pay now/i }) },
@@ -886,22 +890,30 @@ async function getFileInputDetails(page) {
 }
 
 async function chooseFileInput(page, prompts, applicantNumber, usedInputs) {
+  // Case 1: Live IVAC dropzone inputs (direct proximity to .border-dashed)
+  const dropzoneInputs = page.locator('.border-dashed + input[type="file"], [class*="border-dashed"] + input[type="file"], div:has(> [class*="border-dashed"]) input[type="file"]');
+  const dropzoneCount = await dropzoneInputs.count().catch(() => 0);
+  if (dropzoneCount === 1) {
+    // Single reusable dropzone (Live IVAC)
+    return {
+      locator: dropzoneInputs.first(),
+      identity: "ivac-single-dropzone-input",
+    };
+  }
+  if (dropzoneCount > 1 && applicantNumber <= dropzoneCount) {
+    // Multi-dropzone form (one dropzone per applicant)
+    return {
+      locator: dropzoneInputs.nth(applicantNumber - 1),
+      identity: `ivac-dropzone-input-${applicantNumber}`,
+    };
+  }
+
   const inputLocator = page.locator(FILE_INPUT_SELECTOR);
   let details = await getFileInputDetails(page);
   const isPrimary = applicantNumber === 1;
 
   // Filter out dangling/auxiliary inputs (e.g. trailing inputs after confirm buttons)
   const nonDangling = details.filter((item) => !item.isDangling);
-
-  // Case 1: Live IVAC single dropzone reuse
-  // When there is only 1 non-dangling file input on the page, the portal reuses it across all applicants
-  if (nonDangling.length === 1) {
-    const single = nonDangling[0];
-    return {
-      locator: inputLocator.nth(single.index - 1),
-      identity: single.identity,
-    };
-  }
 
   // Case 2: Multi-input portal (e.g. separate file input slots or tests)
   const matchesApplicant = (item) => {
@@ -1388,21 +1400,23 @@ async function waitForApplicantCount(page, expectedCount, timeout = 45_000) {
   return null;
 }
 
-async function waitForNextApplicantSlot(page, currentApplicantNumber, previousInputCount, usedInputs, timeout = 25_000) {
-  const nextApplicantNumber = currentApplicantNumber + 1;
+async function waitForApplicantSlotReady(page, applicantNumber, usedInputs, timeout = 35_000) {
+  const isPrimary = applicantNumber === 1;
+  const label = isPrimary ? "Primary Applicant" : `Secondary Applicant ${applicantNumber}`;
   const deadline = Date.now() + timeout;
   let lastHeartbeat = 0;
   let addAttempted = false;
+
   while (!page.isClosed() && Date.now() < deadline) {
     if (!await waitForPortalNoticesClosed(page, 2_000)) {
       return false;
     }
 
-    // Check if an "Add Applicant" button exists and needs to be clicked (e.g. test mocks / variant UI)
-    if (!addAttempted) {
+    // If secondary and an "Add Applicant" button exists (for multi-slot test mocks/portals), click it
+    if (!isPrimary && !addAttempted) {
       const addControl = await findAddApplicantControl(page);
       if (addControl.found) {
-        log.info(`Adding the upload slot for Secondary Applicant ${nextApplicantNumber}...`);
+        log.info(`Adding the upload slot for ${label}...`);
         if (await clickPortalControl(page, addControl.locator, { timeout: 5_000 })) {
           addAttempted = true;
           await page.waitForTimeout(400);
@@ -1411,68 +1425,87 @@ async function waitForNextApplicantSlot(page, currentApplicantNumber, previousIn
       }
     }
 
-    const details = await getFileInputDetails(page);
-    const nonDangling = details.filter((item) => !item.isDangling);
+    // 1. Check Cloudflare Turnstile token readiness if Turnstile widget is present
+    const turnstileInput = page.locator('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+    const hasTurnstile = await turnstileInput.count().catch(() => 0) > 0;
+    let turnstileReady = true;
+    if (hasTurnstile) {
+      const val = await turnstileInput.first().inputValue().catch(() => "");
+      turnstileReady = Boolean(val && val.trim().length > 0);
+    }
 
-    // Case 1: Single dropzone (Live IVAC portal)
-    if (nonDangling.length === 1) {
-      const input = nonDangling[0];
-      const dropzoneText = await page.locator('.border-dashed, [class*="border-dashed"]').first().innerText().catch(() => "");
-      const isLoading = /loading/i.test(dropzoneText);
+    // 2. Check dropzone container loading state
+    const dropzone = page.locator('.border-dashed, [class*="border-dashed"]').first();
+    const hasDropzone = await dropzone.count().catch(() => 0) > 0;
+    let isLoading = false;
+    if (hasDropzone) {
+      const dropzoneText = (await dropzone.innerText().catch(() => "")).toLowerCase();
+      isLoading = dropzoneText.includes("loading");
+    }
 
-      // Check Turnstile token readiness if Turnstile widget is present
-      const turnstileInput = page.locator('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
-      let turnstileReady = true;
-      if (await turnstileInput.count().catch(() => 0) > 0) {
-        const val = await turnstileInput.first().inputValue().catch(() => "");
-        turnstileReady = Boolean(val && val.trim().length > 0);
-      }
+    // 3. Check file input disabled state
+    const input = page.locator('.border-dashed + input[type="file"], [class*="border-dashed"] + input[type="file"], input[type="file"]').first();
+    const hasInput = await input.count().catch(() => 0) > 0;
+    let isDisabled = false;
+    if (hasInput) {
+      isDisabled = await input.isDisabled().catch(() => false);
+    }
 
-      if (!input.disabled && !isLoading && turnstileReady) {
-        log.info(`Portal is ready for Secondary Applicant ${nextApplicantNumber}.`);
-        return true;
+    // 4. For secondary applicants on live portal: verify previous applicants have been counted
+    if (!isPrimary) {
+      const currentPageText = await page.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      const currentCount = getApplicantCount(currentPageText);
+      if (currentCount !== null && currentCount < applicantNumber - 1) {
+        await page.waitForTimeout(300);
+        continue;
       }
     }
 
-    // Case 2: Multi-input form (Test mocks or separate applicant inputs)
-    if (nonDangling.length > 1) {
-      const text = await page.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
-      const pageShowsSecondarySlot = /upload\s+(?:(?:secondary|additional|other)\s+applicant|secondary|additional)|add\s+(?:another|additional|new)?\s*applicant|অন্য আবেদনকারী/i.test(text);
-      const hasUsableNextInput = nonDangling.some((item) => {
-        if (item.selected) return false;
-        const description = `${item.label} ${item.name} ${item.id}`;
-        const slotNumberMatch = description.match(/(?:secondary|applicant|web\s*file)\s*(?:applicant\s*)?(\d+)/i);
-        const correctNumber = !slotNumberMatch || Number(slotNumberMatch[1]) === nextApplicantNumber;
-        const explicitlySecondary = correctNumber && (/secondary|additional|other\s+applicant|web\s*file|আবেদনকারী/i.test(description) ||
-          new RegExp(`applicant\\s*${nextApplicantNumber}\\b`, "i").test(description));
-        const newlyAddedInput = !usedInputs.has(item.identity) && item.index > previousInputCount;
-        const portalReusedInput = usedInputs.has(item.identity) && explicitlySecondary && pageShowsSecondarySlot;
-        return explicitlySecondary || newlyAddedInput || portalReusedInput;
-      });
-      if (hasUsableNextInput) {
-        log.info(`Portal is ready for Secondary Applicant ${nextApplicantNumber}.`);
-        return true;
-      }
+    if (hasInput && !isDisabled && !isLoading && turnstileReady) {
+      log.info(`Upload slot is ready for ${label}.`);
+      return true;
     }
 
     const now = Date.now();
     if (now - lastHeartbeat >= 5_000) {
-      log.info(`Waiting for portal dropzone / CAPTCHA checks for applicant ${nextApplicantNumber}...`);
+      if (!turnstileReady) {
+        log.action(`Waiting for Cloudflare verification in browser for ${label}...`);
+      } else if (isLoading || isDisabled) {
+        log.info(`Waiting for portal dropzone to be ready for ${label}...`);
+      }
       lastHeartbeat = now;
     }
     await page.waitForTimeout(300).catch(() => {});
   }
 
-  // Fallback: if at least 1 non-dangling input exists, proceed
-  const finalDetails = await getFileInputDetails(page);
-  const finalNonDangling = finalDetails.filter((item) => !item.isDangling);
-  if (finalNonDangling.length >= 1) {
-    log.info(`Portal is ready for Secondary Applicant ${nextApplicantNumber}.`);
+  // Fallback: if timeout reached but input exists, proceed
+  const fallbackInput = page.locator(FILE_INPUT_SELECTOR).first();
+  if (await fallbackInput.count().catch(() => 0) > 0) {
+    log.info(`Proceeding with upload slot for ${label}.`);
     return true;
   }
 
-  log.warn(`No usable Secondary Applicant ${nextApplicantNumber} file input appeared. Current file inputs: ${finalDetails.map((item) => `#${item.index} ${item.label || item.name || item.id || "unlabelled"}`).join("; ") || "none"}.`);
+  log.warn(`No ready upload slot appeared for ${label} within timeout.`);
   return false;
+}
+
+async function findConfirmModalSaveButton(page) {
+  const candidates = [
+    page.getByRole("button", { name: /save\s*&\s*continue|save\s+and\s+continue/i }),
+    page.locator('button').filter({ hasText: /save\s*&\s*continue|save\s+and\s+continue/i }),
+    page.locator('.fixed button, [role="dialog"] button, .modal button, div:has(> h2:has-text("confirm your details")) button').filter({ hasText: /save|continue|proceed/i }),
+  ];
+
+  for (const candidate of candidates) {
+    const count = await candidate.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const btn = candidate.nth(i);
+      if (await btn.isVisible().catch(() => false) && await btn.isEnabled().catch(() => false)) {
+        return btn;
+      }
+    }
+  }
+  return null;
 }
 
 async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmApplicants = false } = {}) {
@@ -1485,24 +1518,6 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
   }
   if (alreadyUploaded > 0) {
     log.info(`The portal already shows ${alreadyUploaded} applicant(s); continuing with the next Webfile.`);
-    const existingInputs = (await getFileInputDetails(page)).filter((item) => !item.isDangling);
-    for (const item of existingInputs) {
-      const description = `${item.label} ${item.name} ${item.id}`;
-      if (/secondary|additional|other/i.test(description)) {
-        continue;
-      }
-      usedInputs.add(item.identity);
-      if (usedInputs.size >= alreadyUploaded) {
-        break;
-      }
-    }
-    if (alreadyUploaded < applicants.length) {
-      const currentInputCount = await page.locator(FILE_INPUT_SELECTOR).count().catch(() => 0);
-      if (!await waitForNextApplicantSlot(page, alreadyUploaded, currentInputCount, usedInputs)) {
-        log.warn(`The portal did not show a ready upload slot for applicant ${alreadyUploaded + 1}.`);
-        return false;
-      }
-    }
   }
 
   for (let index = alreadyUploaded; index < applicants.length; index += 1) {
@@ -1510,14 +1525,20 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
     const applicantNumber = index + 1;
     log.step("Webfile Upload", `Preparing applicant ${applicantNumber} of ${applicants.length} (${applicant.label}): ${path.basename(applicant.path)}`);
 
+    // Ensure slot is 100% ready (Turnstile verified, dropzone enabled, not loading) before attaching
+    if (!await waitForApplicantSlotReady(page, applicantNumber, usedInputs)) {
+      log.warn(`The portal was not ready to receive ${applicant.label}'s Webfile.`);
+      return false;
+    }
+
     const fileInput = await chooseFileInput(page, prompts, applicantNumber, usedInputs);
     if (!fileInput) {
-      log.warn(`Could not safely identify a separate file input for ${applicant.label}.`);
+      log.warn(`Could not safely identify a file input for ${applicant.label}.`);
       return false;
     }
 
     if (!await waitForPortalNoticesClosed(page)) return false;
-    const inputCountBeforeUpload = await page.locator(FILE_INPUT_SELECTOR).count().catch(() => 0);
+
     try {
       await fileInput.locator.setInputFiles(applicant.path);
     } catch (error) {
@@ -1527,30 +1548,19 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
     usedInputs.add(fileInput.identity);
     log.info(`Attached ${path.basename(applicant.path)}; waiting for the portal to confirm ${applicant.label}.`);
 
-    const uploadControls = ["Upload Webfile", "Upload"].map((name) => page.getByRole("button", { name, exact: true }));
-    let uploadControlExists = false;
+    const uploadControls = ["Upload Webfile", "Upload", "ওয়েবফাইল আপলোড"].map((name) =>
+      page.getByRole("button", { name, exact: true })
+    );
     for (const locator of uploadControls) {
       const count = await locator.count().catch(() => 0);
       for (let controlIndex = 0; controlIndex < count; controlIndex += 1) {
-        if (await locator.nth(controlIndex).isVisible().catch(() => false)) {
-          uploadControlExists = true;
+        const btn = locator.nth(controlIndex);
+        if (await btn.isVisible().catch(() => false) && await btn.isEnabled().catch(() => false)) {
+          log.info(`Clicking upload button for ${applicant.label}...`);
+          await clickPortalControl(page, btn, { timeout: 5_000 });
           break;
         }
       }
-      if (uploadControlExists) break;
-    }
-    if (uploadControlExists) {
-      const uploadAction = await waitForUniqueControlUntilReady(
-        page,
-        ["button"],
-        ["Upload Webfile", "Upload"],
-        `Upload Webfile for ${applicant.label}`,
-      );
-      if (!uploadAction.found) {
-        log.warn("The upload action is ambiguous. Guided booking stopped.");
-        return false;
-      }
-      if (!await clickPortalControl(page, uploadAction.locator, { timeout: 5_000 })) return false;
     }
 
     let report = await reportVisibleIssues(page);
@@ -1574,13 +1584,6 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
       return false;
     }
     log.success(`Applicant ${applicantNumber} (${applicant.label}) confirmed. Count: ${acceptedCount}.`);
-
-    if (index + 1 < applicants.length) {
-      if (!await waitForNextApplicantSlot(page, applicantNumber, inputCountBeforeUpload, usedInputs)) {
-        log.warn(`The portal did not show a ready upload slot for applicant ${applicantNumber + 1}.`);
-        return false;
-      }
-    }
   }
 
   const finalReport = await reportVisibleIssues(page);
@@ -1603,41 +1606,85 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
     }
   }
 
-  // Check if Turnstile is running on the Webfile page
-  await waitForCaptchaIfNeeded(page);
+  // 1. Check if the "Please confirm your details" confirmation modal is already open
+  let saveAndContinueBtn = await findConfirmModalSaveButton(page);
 
-  const confirmButton = await waitForUniqueControlUntilReady(
-    page,
-    ["button"],
-    ["Confirm All Information is Correct"],
-    "applicant confirmation",
-  );
-  if (!confirmButton.found) {
-    log.warn("Could not uniquely identify the applicant confirmation button. Review the page and confirm manually.");
-    return false;
-  }
-  if (!autoConfirmApplicants && !await askYesNo(
-    prompts,
-    `Confirm the ${applicants.length} applicant Webfiles are correct and continue? This saves the Primary Webfile, which the portal says cannot be deleted or reuploaded.`,
-  )) {
-    log.info("Applicant Webfile confirmation cancelled.");
-    return false;
-  }
-  log.step("Confirm Applicants", "Confirming all applicant information with portal...");
-  if (!await clickPortalControl(page, confirmButton.locator, { timeout: 5_000 })) return false;
+  if (!saveAndContinueBtn) {
+    // Check if Turnstile is running on the Webfile page
+    await waitForCaptchaIfNeeded(page);
 
-  // Handle any confirmation popup/modal if present
-  const dialogConfirm = page.locator('[role="dialog"] button, .modal button').filter({ hasText: /yes|confirm|proceed|ok|continue/i });
-  if (await dialogConfirm.count().catch(() => 0) > 0 && await dialogConfirm.first().isVisible().catch(() => false)) {
-    log.info("Confirming portal dialog modal...");
-    await clickPortalControl(page, dialogConfirm.first(), { timeout: 3_000 });
+    const confirmButton = await waitForUniqueControlUntilReady(
+      page,
+      ["button"],
+      ["Confirm All Information is Correct"],
+      "applicant confirmation",
+      15_000,
+    );
+    if (!confirmButton.found) {
+      // Re-check if Save & Continue appeared while waiting
+      saveAndContinueBtn = await findConfirmModalSaveButton(page);
+      if (!saveAndContinueBtn) {
+        log.warn("Could not uniquely identify the applicant confirmation button. Review the page and confirm manually.");
+        return false;
+      }
+    } else {
+      if (!autoConfirmApplicants && !await askYesNo(
+        prompts,
+        `Confirm the ${applicants.length} applicant Webfiles are correct and continue? This saves the Primary Webfile, which the portal says cannot be deleted or reuploaded.`,
+      )) {
+        log.info("Applicant Webfile confirmation cancelled.");
+        return false;
+      }
+      log.step("Confirm Applicants", "Confirming all applicant information with portal...");
+      if (!await clickPortalControl(page, confirmButton.locator, { timeout: 5_000 })) return false;
+    }
+  }
+
+  // 2. If Save & Continue was not already open, wait for the modal dialog to appear (up to 10s)
+  if (!saveAndContinueBtn) {
+    const modalDeadline = Date.now() + 10_000;
+    while (!page.isClosed() && Date.now() < modalDeadline) {
+      const isNextStep = await waitForAnyState([
+        { locator: page.getByText(/select ivac cent(?:re|er)/i) },
+        { locator: page.getByText(/select mission/i) },
+        { locator: page.locator("select"), state: "visible" },
+        { locator: page.locator('input[type="date"]'), state: "visible" },
+        { locator: page.getByText(/appointment calendar|select appointment date/i) },
+      ], 200);
+      if (isNextStep) {
+        break;
+      }
+
+      saveAndContinueBtn = await findConfirmModalSaveButton(page);
+      if (saveAndContinueBtn) {
+        break;
+      }
+      await page.waitForTimeout(200);
+    }
+  }
+
+  // 3. Click Save & Continue if present
+  if (saveAndContinueBtn) {
+    log.step("Confirm Applicants", "Clicking 'Save & Continue' in confirmation dialog...");
+    if (!await clickPortalControl(page, saveAndContinueBtn, { timeout: 8_000 })) {
+      log.warn("Could not click Save & Continue button in confirmation dialog.");
+      return false;
+    }
+    await page.waitForTimeout(400);
+    const remainingModalBtn = await findConfirmModalSaveButton(page);
+    if (remainingModalBtn && await remainingModalBtn.isVisible().catch(() => false)) {
+      await clickPortalControl(page, remainingModalBtn, { timeout: 3_000, force: true }).catch(() => {});
+    }
   }
 
   const bookingStepReady = await waitForPortalStep(page, "IVAC Centre/date selection", [
     { locator: page.getByText(/select ivac cent(?:re|er)/i) },
+    { locator: page.getByText(/select mission/i) },
     { locator: page.locator("select"), state: "visible" },
     { locator: page.locator('input[type="date"]'), state: "visible" },
     { locator: page.getByText(/appointment calendar|select appointment date/i) },
+    { locator: page.locator('[role="combobox"]'), state: "visible" },
+    { locator: page.getByRole("heading", { name: /select (?:ivac )?cent(?:re|er)|select mission|appointment details/i }) },
   ]);
   if (!bookingStepReady) {
     log.warn("Applicant confirmation was clicked, but the centre/date step did not appear.");
