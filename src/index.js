@@ -19,7 +19,15 @@ import { startPageJournal } from "./journal.js";
 import { gotoWithRecovery } from "./resilience.js";
 import { parseAccounts, planAccountRuns, safeAccountName } from "./accounts.js";
 import { spawn } from "node:child_process";
-import { PANEL_MODE, createPanelPrompts, forwardConsoleToPanel, nextPanelCommand, onPanelStop, panelOtp, sendToPanel } from "./panel-bridge.js";
+import {
+  PANEL_MODE,
+  createPanelPrompts,
+  forwardConsoleToPanel,
+  nextPanelCommand,
+  onPanelStop,
+  panelOtp,
+  sendToPanel,
+} from "./panel-bridge.js";
 import {
   fillLabeledFields,
   getAvailabilityState,
@@ -28,10 +36,17 @@ import {
 } from "./assistant.js";
 
 const PORTAL_URL = "https://appointment.ivacbd.com/";
-const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PROJECT_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const PROFILE_PATH = path.join(PROJECT_ROOT, "profile.json");
-const CREDENTIALS_PATH = process.env.IVAC_CREDENTIALS ? path.resolve(process.env.IVAC_CREDENTIALS) : path.join(PROJECT_ROOT, "credentials.json");
-const DOC_ROOT = process.env.IVAC_DOC_ROOT ? path.resolve(process.env.IVAC_DOC_ROOT) : path.join(PROJECT_ROOT, "doc_file");
+const CREDENTIALS_PATH = process.env.IVAC_CREDENTIALS
+  ? path.resolve(process.env.IVAC_CREDENTIALS)
+  : path.join(PROJECT_ROOT, "credentials.json");
+const DOC_ROOT = process.env.IVAC_DOC_ROOT
+  ? path.resolve(process.env.IVAC_DOC_ROOT)
+  : path.join(PROJECT_ROOT, "doc_file");
 // Set by the multi-account launcher for each account's own window.
 const ACTIVE_USER = (process.env.IVAC_USER || "").trim() || null;
 // Every account gets its own browser profile, so logins never mix.
@@ -41,7 +56,8 @@ const BROWSER_DATA_PATH = ACTIVE_USER
 const CHECK_INTERVAL_MS = 15_000;
 // Seconds between account windows, so the portal does not see many sign-ins
 // at once (it answers too many sign-ins with HTTP 429).
-const STAGGER_MS = Math.max(0, Number(process.env.IVAC_STAGGER_SECONDS ?? 20)) * 1000;
+const STAGGER_MS =
+  Math.max(0, Number(process.env.IVAC_STAGGER_SECONDS ?? 20)) * 1000;
 
 async function loadProfile() {
   try {
@@ -70,7 +86,9 @@ async function loadAccountConfig() {
     await access(CREDENTIALS_PATH);
   } catch (error) {
     if (error.code === "ENOENT") {
-      console.log("No credentials.json found. Add contactNumber and password to enable automatic sign-in.");
+      console.log(
+        "No credentials.json found. Add contactNumber and password to enable automatic sign-in.",
+      );
       return { mode: "none", accounts: [], problems: [] };
     }
     throw error;
@@ -81,24 +99,41 @@ async function loadAccountConfig() {
 // Opens one independent window (own console, own browser, own login) per
 // account, a few seconds apart.
 function openAccountWindow(account, startDelayMs) {
-  const env = { ...process.env, IVAC_USER: account.name, IVAC_START_DELAY_MS: String(startDelayMs) };
+  const env = {
+    ...process.env,
+    IVAC_USER: account.name,
+    IVAC_START_DELAY_MS: String(startDelayMs),
+  };
   if (process.env.IVAC_LAUNCH_DRY_RUN) {
     log.info(`[dry run] would open a window for ${account.name}`);
     return;
   }
   if (process.platform === "win32") {
-    const title = `IVAC ${safeAccountName(account.name)}`.replace(/["^&|<>]/g, "");
+    const title = `IVAC ${safeAccountName(account.name)}`.replace(
+      /["^&|<>]/g,
+      "",
+    );
     const command = `start "${title}" /D "${PROJECT_ROOT}" cmd /k node src\\index.js`;
     spawn("cmd.exe", ["/d", "/s", "/c", `"${command}"`], {
-      env, cwd: PROJECT_ROOT, detached: true, stdio: "ignore", windowsVerbatimArguments: true,
+      env,
+      cwd: PROJECT_ROOT,
+      detached: true,
+      stdio: "ignore",
+      windowsVerbatimArguments: true,
     }).unref();
     return;
   }
   // Other systems: run in the background and prefix each line with the account.
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { env, cwd: PROJECT_ROOT, stdio: ["ignore", "pipe", "pipe"] });
-  const prefix = (stream) => stream.on("data", (chunk) => {
-    for (const line of String(chunk).split(/\r?\n/)) if (line.trim()) console.log(`[${account.name}] ${line}`);
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+    env,
+    cwd: PROJECT_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  const prefix = (stream) =>
+    stream.on("data", (chunk) => {
+      for (const line of String(chunk).split(/\r?\n/))
+        if (line.trim()) console.log(`[${account.name}] ${line}`);
+    });
   prefix(child.stdout);
   prefix(child.stderr);
 }
@@ -108,16 +143,25 @@ async function launchAccounts(accounts) {
   const { ready, notes } = await planAccountRuns(accounts, DOC_ROOT);
   for (const note of notes) log.warn(note);
   if (ready.length === 0) {
-    log.error("No account is ready. Put each account's PDFs in doc_file/<name>/ using the names from credentials.json.");
+    log.error(
+      "No account is ready. Put each account's PDFs in doc_file/<name>/ using the names from credentials.json.",
+    );
     return;
   }
-  log.info(`${ready.length} account(s) ready; opening one independent browser window for each.`);
+  log.info(
+    `${ready.length} account(s) ready; opening one independent browser window for each.`,
+  );
   ready.forEach((account, index) => {
     const delay = index * STAGGER_MS;
-    log.item(account.name, `${account.pdfs.length} PDF(s) in doc_file/${safeAccountName(account.name)} • number ending ${account.contactNumber.slice(-2)} • starts ${delay ? `after ${delay / 1000}s` : "now"}`);
+    log.item(
+      account.name,
+      `${account.pdfs.length} PDF(s) in doc_file/${safeAccountName(account.name)} • number ending ${account.contactNumber.slice(-2)} • starts ${delay ? `after ${delay / 1000}s` : "now"}`,
+    );
     openAccountWindow(account, delay);
   });
-  log.success("All account windows were opened. Each one signs in on its own; enter each OTP in that account's browser.");
+  log.success(
+    "All account windows were opened. Each one signs in on its own; enter each OTP in that account's browser.",
+  );
 }
 
 async function readPageText(page) {
@@ -162,7 +206,11 @@ function installBrowserErrorReporting(page, credentials) {
     const text = message.text();
     // Filter non-essential tracking / font / analytics errors
     // Also skip the Cloudflare challenge widget's own Content Security Policy noise.
-    if (/analytics|gtag|doubleclick|clarity|hotjar|favicon|fonts\.gstatic|Content Security Policy|cannot load data:,|challenges\.cloudflare/i.test(text)) {
+    if (
+      /analytics|gtag|doubleclick|clarity|hotjar|favicon|fonts\.gstatic|Content Security Policy|cannot load data:,|challenges\.cloudflare/i.test(
+        text,
+      )
+    ) {
       return;
     }
     log.warn(`Browser console: ${redactSensitiveText(text, credentials)}`);
@@ -182,14 +230,20 @@ function installBrowserErrorReporting(page, credentials) {
     if (["image", "font", "stylesheet", "media"].includes(resourceType)) {
       return;
     }
-    if (/analytics|gtag|doubleclick|clarity|hotjar|google|challenges\.cloudflare\.com|cloudflareinsights/i.test(url)) {
+    if (
+      /analytics|gtag|doubleclick|clarity|hotjar|google|challenges\.cloudflare\.com|cloudflareinsights/i.test(
+        url,
+      )
+    ) {
       return;
     }
     const failure = request.failure();
     if (failure?.errorText === "net::ERR_ABORTED") {
       return;
     }
-    log.warn(`Request failed: ${request.method()} ${safeUrlForLog(url, credentials)} (${failure?.errorText || "unknown"})`);
+    log.warn(
+      `Request failed: ${request.method()} ${safeUrlForLog(url, credentials)} (${failure?.errorText || "unknown"})`,
+    );
   });
 }
 
@@ -197,14 +251,18 @@ function printPageStatus(pageText, current, previous) {
   const availability = getAvailabilityState(pageText);
 
   if (current.key !== previous.step) {
-    const guidance = current.key === "unknown" ? getPortalStep(pageText).guidance : "";
+    const guidance =
+      current.key === "unknown" ? getPortalStep(pageText).guidance : "";
     log.step(`Current Page: ${current.label}`, guidance);
     previous.step = current.key;
   }
 
   if (availability === "possible" && previous.availability !== "possible") {
     log.success("Possible appointment availability detected on page.");
-  } else if (availability === "unavailable" && previous.availability !== "unavailable") {
+  } else if (
+    availability === "unavailable" &&
+    previous.availability !== "unavailable"
+  ) {
     log.info("Page indicates no slot is currently available.");
   }
   previous.availability = availability;
@@ -215,11 +273,19 @@ function printPageStatus(pageText, current, previous) {
 // room, date picker, declaration). The page a tab was on when watching started
 // (initialKeys) does not count, so a flow that stopped on the date picker is
 // not restarted in a loop.
-function startPortalWatcher(context, { initialKeys = new Map(), onEnterBookingPage = () => {} } = {}) {
+function startPortalWatcher(
+  context,
+  { initialKeys = new Map(), onEnterBookingPage = () => {} } = {},
+) {
   const states = new Map();
   const stateFor = (page) => {
     if (!states.has(page)) {
-      states.set(page, { step: initialKeys.get(page) ?? null, availability: null, checking: false, timer: null });
+      states.set(page, {
+        step: initialKeys.get(page) ?? null,
+        availability: null,
+        checking: false,
+        timer: null,
+      });
     }
     return states.get(page);
   };
@@ -244,30 +310,62 @@ function startPortalWatcher(context, { initialKeys = new Map(), onEnterBookingPa
           return booking.detectPortalPage(page);
         })(),
         new Promise((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error("page check timed out; retrying")), 20_000);
+          timeoutId = setTimeout(
+            () => reject(new Error("page check timed out; retrying")),
+            20_000,
+          );
         }),
       ]);
       const changed = current.key !== previous.step;
       // Seen live: the OTP can take longer than the flow's sign-in wait. When a
       // tab moves from Sign in / OTP to a logged-in page, continue from there.
-      const cameFromLogin = previous.step === "login" || previous.step === "otp";
-      const loggedInNow = cameFromLogin && changed &&
+      const cameFromLogin =
+        previous.step === "login" || previous.step === "otp";
+      const loggedInNow =
+        cameFromLogin &&
+        changed &&
         (["booking-guide", "webfile"].includes(current.key) ||
-          (current.key === "dashboard" && await booking.isAlreadyLoggedIn(page).catch(() => false)));
+          (current.key === "dashboard" &&
+            (await booking.isAlreadyLoggedIn(page).catch(() => false))));
       // The portal's login can expire mid-booking (the browser lands on Sign
       // in). Start the flow again: it signs in and continues from the step the
       // portal saved. At most once every 3 minutes, so a failing sign-in is
       // not repeated in a loop.
-      const wasLoggedIn = ["dashboard", "booking-guide", "webfile", "mission", "waiting", "time-slot", "declaration", "payment"].includes(previous.step);
-      const sessionExpired = changed && wasLoggedIn && current.key === "login" &&
+      const wasLoggedIn = [
+        "dashboard",
+        "booking-guide",
+        "webfile",
+        "mission",
+        "waiting",
+        "time-slot",
+        "declaration",
+        "payment",
+      ].includes(previous.step);
+      const sessionExpired =
+        changed &&
+        wasLoggedIn &&
+        current.key === "login" &&
         Date.now() - (previous.lastRelogin || 0) >= 3 * 60_000;
-      printPageStatus(await readPageText(page).catch(() => ""), { ...current, label: `${current.label}${tabName(page)}` }, previous);
+      printPageStatus(
+        await readPageText(page).catch(() => ""),
+        { ...current, label: `${current.label}${tabName(page)}` },
+        previous,
+      );
       previous.step = current.key;
-      if ((changed && booking.isAutoResumePage(current.key)) || loggedInNow || sessionExpired) {
-        if (loggedInNow) log.success("Sign-in completed in the browser; continuing the booking.");
+      if (
+        (changed && booking.isAutoResumePage(current.key)) ||
+        loggedInNow ||
+        sessionExpired
+      ) {
+        if (loggedInNow)
+          log.success(
+            "Sign-in completed in the browser; continuing the booking.",
+          );
         if (sessionExpired) {
           previous.lastRelogin = Date.now();
-          log.warn("The portal logged out (session expired). Signing in again and continuing from the saved step.");
+          log.warn(
+            "The portal logged out (session expired). Signing in again and continuing from the saved step.",
+          );
         }
         onEnterBookingPage(page, current);
       }
@@ -303,13 +401,16 @@ function startPortalWatcher(context, { initialKeys = new Map(), onEnterBookingPa
   context.pages().forEach(attach);
   context.on("page", attach);
 
-  log.info("Watching all browser tabs: the booking continues automatically when a tab opens the Mission, waiting room, date picker or declaration page.");
+  log.info(
+    "Watching all browser tabs: the booking continues automatically when a tab opens the Mission, waiting room, date picker or declaration page.",
+  );
   checkAll();
   const timer = setInterval(checkAll, CHECK_INTERVAL_MS);
   return () => {
     clearInterval(timer);
     for (const state of states.values()) clearTimeout(state.timer);
-    for (const [page, onNavigated] of listeners) page.off("framenavigated", onNavigated);
+    for (const [page, onNavigated] of listeners)
+      page.off("framenavigated", onNavigated);
     context.off("page", attach);
   };
 }
@@ -318,12 +419,19 @@ const FLOW_OPTIONS = {
   autoUseDocFolder: true,
   autoConfirmApplicants: true,
   // A named account uploads its own folder: doc_file/<name>/.
-  ...(ACTIVE_USER ? { docFolder: path.join(DOC_ROOT, safeAccountName(ACTIVE_USER)) } : {}),
+  ...(ACTIVE_USER
+    ? { docFolder: path.join(DOC_ROOT, safeAccountName(ACTIVE_USER)) }
+    : {}),
 };
 
 async function runFlowSafely(page, prompts, credentials) {
   try {
-    await booking.runGuidedBookingFlow(page, prompts, credentials, FLOW_OPTIONS);
+    await booking.runGuidedBookingFlow(
+      page,
+      prompts,
+      credentials,
+      FLOW_OPTIONS,
+    );
   } catch (error) {
     log.error("Guided booking stopped: " + error.message);
   }
@@ -346,16 +454,22 @@ async function main() {
   if (config.mode === "single") {
     credentials = config.accounts[0];
   } else if (config.mode === "multi") {
-    credentials = config.accounts.find((account) => account.name === ACTIVE_USER) || null;
+    credentials =
+      config.accounts.find((account) => account.name === ACTIVE_USER) || null;
     if (!credentials) {
       throw new Error(`No login for "${ACTIVE_USER}" in credentials.json.`);
     }
   }
   if (ACTIVE_USER) {
     process.stdout.write(`\x1b]0;IVAC ${safeAccountName(ACTIVE_USER)}\x07`);
-    const startDelay = Math.max(0, Number(process.env.IVAC_START_DELAY_MS || 0));
+    const startDelay = Math.max(
+      0,
+      Number(process.env.IVAC_START_DELAY_MS || 0),
+    );
     if (startDelay) {
-      log.info(`${ACTIVE_USER}: starting in ${Math.round(startDelay / 1000)}s so the accounts do not all sign in at once.`);
+      log.info(
+        `${ACTIVE_USER}: starting in ${Math.round(startDelay / 1000)}s so the accounts do not all sign in at once.`,
+      );
       await new Promise((resolve) => setTimeout(resolve, startDelay));
     }
   }
@@ -386,16 +500,20 @@ async function main() {
 
   const page = context.pages()[0] || (await context.newPage());
   const stopJournal = startPageJournal(context, {
-    onPage: (entry) => sendToPanel({
-      type: "page",
-      tab: entry.tab,
-      path: entry.path,
-      key: entry.page.key,
-      label: entry.page.label,
-      turnstile: entry.turnstile,
-      buttons: entry.buttons.filter((button) => button.visible && !button.disabled).map((button) => button.text).slice(0, 8),
-      alerts: entry.alerts,
-    }),
+    onPage: (entry) =>
+      sendToPanel({
+        type: "page",
+        tab: entry.tab,
+        path: entry.path,
+        key: entry.page.key,
+        label: entry.page.label,
+        turnstile: entry.turnstile,
+        buttons: entry.buttons
+          .filter((button) => button.visible && !button.disabled)
+          .map((button) => button.text)
+          .slice(0, 8),
+        alerts: entry.alerts,
+      }),
   });
   installBrowserErrorReporting(page, credentials);
   context.on("page", (newPage) => {
@@ -405,25 +523,36 @@ async function main() {
   let stopSourceWatch = () => {};
   // In the panel, questions are answered there and the OTP typed there is
   // filled into the portal; in a terminal they use the keyboard as before.
-  const prompts = PANEL_MODE ? createPanelPrompts() : readline.createInterface({ input: stdin, output: stdout });
+  const prompts = PANEL_MODE
+    ? createPanelPrompts()
+    : readline.createInterface({ input: stdin, output: stdout });
   booking.setOtpProvider?.(PANEL_MODE ? panelOtp : null);
   onPanelStop(() => {
-    log.warn("Stop requested from the control panel; closing this account's browser.");
+    log.warn(
+      "Stop requested from the control panel; closing this account's browser.",
+    );
     context.close().catch(() => {});
   });
   sendToPanel({ type: "state", state: "running" });
 
   try {
-    log.banner("IVAC VISA BOOKING AUTOMATION", ACTIVE_USER
-      ? `Account: ${ACTIVE_USER} • Stops Safely at Payment Step`
-      : "Guided Flow • Stops Safely at Payment Step");
+    log.banner(
+      "IVAC VISA BOOKING AUTOMATION",
+      ACTIVE_USER
+        ? `Account: ${ACTIVE_USER} • Stops Safely at Payment Step`
+        : "Guided Flow • Stops Safely at Payment Step",
+    );
     if (ACTIVE_USER) {
-      log.info(`Account ${ACTIVE_USER}: documents from doc_file/${safeAccountName(ACTIVE_USER)}, browser profile user-data/${safeAccountName(ACTIVE_USER)}.`);
+      log.info(
+        `Account ${ACTIVE_USER}: documents from doc_file/${safeAccountName(ACTIVE_USER)}, browser profile user-data/${safeAccountName(ACTIVE_USER)}.`,
+      );
     }
     log.info(`Connecting to IVAC portal (${PORTAL_URL})...`);
     // Under heavy load the first page may time out or show an error page.
-    if (!await gotoWithRecovery(page, PORTAL_URL)) {
-      log.warn("The portal did not open properly; continuing with whatever the browser shows.");
+    if (!(await gotoWithRecovery(page, PORTAL_URL))) {
+      log.warn(
+        "The portal did not open properly; continuing with whatever the browser shows.",
+      );
     }
     await page.waitForTimeout(500);
     await booking.dismissPortalNotices(page);
@@ -450,7 +579,10 @@ async function main() {
     const watch = async () => {
       const initialKeys = new Map();
       for (const openPage of context.pages()) {
-        initialKeys.set(openPage, (await booking.detectPortalPage(openPage)).key);
+        initialKeys.set(
+          openPage,
+          (await booking.detectPortalPage(openPage)).key,
+        );
       }
       stopWatching = startPortalWatcher(context, {
         initialKeys,
@@ -470,22 +602,34 @@ async function main() {
       try {
         await reloadBookingCode();
         booking.setOtpProvider?.(PANEL_MODE ? panelOtp : null);
-        log.success(`Booking code reloaded (${reason}); the browser and login stay as they are.`);
+        log.success(
+          `Booking code reloaded (${reason}); the browser and login stay as they are.`,
+        );
       } catch (error) {
-        log.error(`Could not load the changed booking code: ${error.message}. Still using the previous code.`);
+        log.error(
+          `Could not load the changed booking code: ${error.message}. Still using the previous code.`,
+        );
         return;
       }
       if (resumeRequest) return;
       const target = currentPage();
-      resumeRequest = { page: target, current: await booking.detectPortalPage(target) };
+      resumeRequest = {
+        page: target,
+        current: await booking.detectPortalPage(target),
+      };
       menuAbort?.abort();
     };
     let reloadTimer = null;
-    const sourceWatcher = watchSourceFolder(fileURLToPath(new URL(".", import.meta.url)), (event, file) => {
-      if (file !== "booking.js") return;
-      clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => { void reloadAndContinue("src/booking.js changed"); }, 1_500);
-    });
+    const sourceWatcher = watchSourceFolder(
+      fileURLToPath(new URL(".", import.meta.url)),
+      (event, file) => {
+        if (file !== "booking.js") return;
+        clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          void reloadAndContinue("src/booking.js changed");
+        }, 1_500);
+      },
+    );
     stopSourceWatch = () => {
       clearTimeout(reloadTimer);
       sourceWatcher.close();
@@ -497,7 +641,9 @@ async function main() {
         stopWatching();
         activePage = targetPage;
         await targetPage.bringToFront().catch(() => {});
-        log.info(`${current.label} is open; continuing the booking from this page.`);
+        log.info(
+          `${current.label} is open; continuing the booking from this page.`,
+        );
         await runFlowSafely(targetPage, prompts, credentials);
         resumeRequest = null;
         await watch();
