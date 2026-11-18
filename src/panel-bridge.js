@@ -49,6 +49,10 @@ const pendingQuestions = new Map();
 const commandWaiters = [];
 const commandQueue = [];
 const stopListeners = [];
+let peekHandler = null;
+let focusHandler = null;
+let goLiveTriggered = false;
+const goLiveWaiters = [];
 let otpCode = null;
 
 if (PANEL_MODE) {
@@ -65,6 +69,30 @@ if (PANEL_MODE) {
       if (digits.length >= 4 && digits.length <= 8) {
         otpCode = digits;
         sendToPanel({ type: "otp-received" });
+      }
+      return;
+    }
+    if (message.type === "peek") {
+      const id = message.id;
+      if (!peekHandler) {
+        sendToPanel({ type: "peek-result", id, ok: false, error: "Browser page is not ready for screenshot yet." });
+        return;
+      }
+      Promise.resolve()
+        .then(() => peekHandler())
+        .then((result) => sendToPanel({ type: "peek-result", id, ok: true, ...result }))
+        .catch((error) => sendToPanel({ type: "peek-result", id, ok: false, error: error.message }));
+      return;
+    }
+    if (message.type === "focus") {
+      if (focusHandler) Promise.resolve().then(() => focusHandler()).catch(() => {});
+      return;
+    }
+    if (message.type === "go-live") {
+      goLiveTriggered = true;
+      while (goLiveWaiters.length) {
+        const resolve = goLiveWaiters.shift();
+        resolve(message);
       }
       return;
     }
@@ -93,6 +121,33 @@ export const panelOtp = {
 
 export function onPanelStop(listener) {
   stopListeners.push(listener);
+}
+
+export function onPanelPeek(handler) {
+  peekHandler = handler;
+}
+
+export function onPanelFocus(handler) {
+  focusHandler = handler;
+}
+
+export function waitForGoLive(signal) {
+  if (goLiveTriggered) {
+    goLiveTriggered = false;
+    return Promise.resolve({ type: "go-live" });
+  }
+  return new Promise((resolve, reject) => {
+    const onLive = (msg) => {
+      goLiveTriggered = false;
+      resolve(msg);
+    };
+    goLiveWaiters.push(onLive);
+    signal?.addEventListener("abort", () => {
+      const idx = goLiveWaiters.indexOf(onLive);
+      if (idx !== -1) goLiveWaiters.splice(idx, 1);
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    }, { once: true });
+  });
 }
 
 // Waits for the next command from the panel ("resume", "reload" or "stop").

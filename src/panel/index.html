@@ -1071,6 +1071,211 @@
   .modal-box p { margin: 0 0 18px; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+  /* ---------- Hybrid Engine Bar, Circuit Breaker & Diagnostics ---------- */
+  .hybrid-bar {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 11px 14px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .hybrid-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .health-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    background: var(--ok-bg);
+    color: var(--ok);
+    border: 1px solid var(--ok-border);
+  }
+  .health-pill.degraded { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+  .health-pill.open { background: var(--bad-bg); color: var(--bad); border-color: var(--bad-border); }
+  .health-reason { font-size: 12px; color: var(--muted); }
+  .sys-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .settings-drawer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    display: grid;
+    gap: 12px;
+  }
+  .settings-drawer[hidden] { display: none; }
+  .settings-nums {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .settings-nums label { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+  .settings-nums input[type=number] {
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+  .settings-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+  }
+  .settings-checks label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    margin: 0;
+  }
+  .diag-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .diag-strip[hidden] { display: none; }
+  .diag-chip {
+    font-size: 11px;
+    font-weight: 650;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .diag-chip.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
+  .diag-chip.bad { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
+  .portal-alerts {
+    margin-top: 10px;
+    padding: 8px 11px;
+    border-radius: 9px;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .portal-alerts[hidden] { display: none; }
+  .pool-tag {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--brand-soft);
+    color: var(--brand);
+  }
+  .pool-tag[hidden] { display: none; }
+
+  /* ---------- Radar, Standby & Live Peek ---------- */
+  .radar-row {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .radar-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    background: var(--idle-bg);
+    color: var(--idle);
+    border: 1px solid var(--line);
+  }
+  .radar-pill.watching { background: var(--info-bg); color: var(--info); border-color: var(--info-border); }
+  .radar-pill.open { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
+  .badge.radar { background: #ede9fe; color: #6d28d9; }
+  :root[data-theme="dark"] .badge.radar { background: #2d1b4e; color: #c4b5fd; }
+  .badge.standby { background: var(--brand-soft); color: var(--brand); }
+  .acct[data-state="radar"] { border-left-color: #7c3aed; }
+  .acct[data-state="standby"] { border-left-color: var(--brand); }
+  .role-select {
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 650;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .role-select[data-role="radar"] { background: #ede9fe; color: #6d28d9; border-color: #c4b5fd; }
+  :root[data-theme="dark"] .role-select[data-role="radar"] { background: #2d1b4e; color: #c4b5fd; border-color: #5b21b6; }
+  .role-select[data-role="standby"] { background: var(--brand-soft); color: var(--brand); border-color: color-mix(in srgb, var(--brand) 35%, var(--line)); }
+  .role-select:disabled { opacity: .75; cursor: not-allowed; }
+
+  .peek-box {
+    width: 100%;
+    max-width: 960px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+  }
+  .peek-hd {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .peek-hd h3 { margin: 0; font-size: 15px; }
+  .peek-meta { font-size: 12px; color: var(--muted); }
+  .peek-img-wrap {
+    background: #0b1120;
+    min-height: 280px;
+    max-height: 75vh;
+    overflow: auto;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+  }
+  .peek-img-wrap img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  }
+  .peek-status { color: #94a3b8; font-size: 13px; padding: 36px; text-align: center; }
+
   /* ---------- Responsive ---------- */
   @media (max-width: 1180px) {
     .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1264,6 +1469,59 @@
 
     <!-- Right Main Workspace: Accounts -->
     <main>
+      <!-- Hybrid System Engine, Circuit Breaker & Concurrency Controls -->
+      <section class="hybrid-bar" aria-label="Hybrid Engine Controls">
+        <div class="hybrid-row">
+          <span class="health-pill" id="cbPill">● Portal Healthy</span>
+          <span class="health-reason" id="cbReason"></span>
+          <button type="button" class="xs" id="cbToggleBtn">Pause Queue</button>
+          <div class="spacer"></div>
+          <span class="sys-chip" id="poolChip" title="Shared Browser Pool active Chrome processes and isolated contexts">Pool: Standby</span>
+          <span class="sys-chip" id="queueChip" title="Active running accounts vs concurrency limit and launch queue">Active 0 / 10</span>
+          <button type="button" class="xs" id="settingsToggleBtn">⚙ Engine Settings</button>
+        </div>
+        <div class="radar-row">
+          <span class="radar-pill" id="radarPill">Radar: Idle</span>
+          <span class="health-reason" id="radarDetail">Set 1–2 accounts to Radar and others to Standby so they pre-open the site without retrying login</span>
+          <div class="spacer"></div>
+          <span class="sys-chip" id="standbyChip">Standby: 0 ready</span>
+          <button type="button" class="xs" id="setOthersStandbyBtn" title="Mark every non-Radar account as Standby">Set Others → Standby</button>
+          <button type="button" class="xs primary" id="triggerStandbyBtn" disabled title="Wake all Standby accounts to start logging in now">▶ Trigger Standby</button>
+          <button type="button" class="xs" id="resetRadarBtn" hidden>Reset Radar</button>
+        </div>
+        <div class="settings-drawer" id="settingsDrawer" hidden>
+          <div class="settings-nums">
+            <div>
+              <label for="setMaxConcurrent">Max Concurrent Accounts</label>
+              <input type="number" id="setMaxConcurrent" min="1" max="100" value="10">
+            </div>
+            <div>
+              <label for="setStagger">Stagger Gap (seconds)</label>
+              <input type="number" id="setStagger" min="0" max="180" value="20">
+            </div>
+            <div>
+              <label for="setContextsPerBrowser">Accounts per Shared Chrome</label>
+              <input type="number" id="setContextsPerBrowser" min="1" max="25" value="10">
+            </div>
+            <div>
+              <label for="setRadarInterval">Radar Check Interval (sec)</label>
+              <input type="number" id="setRadarInterval" min="3" max="60" value="10">
+            </div>
+          </div>
+          <div class="settings-checks">
+            <label><input type="checkbox" id="setPoolMode" checked> Shared Browser Pool</label>
+            <label><input type="checkbox" id="setBlockAssets" checked> Block Heavy Assets (Images/Fonts/Trackers)</label>
+            <label><input type="checkbox" id="setOnDemandJournal" checked> On-Demand Lightweight Journal</label>
+            <label><input type="checkbox" id="setCbEnabled" checked> Adaptive Circuit Breaker</label>
+            <label><input type="checkbox" id="setHeadless"> Headless Browser</label>
+          </div>
+          <div class="hybrid-row">
+            <button type="button" class="sm primary" id="saveSettingsBtn">Apply Engine Settings</button>
+            <span class="health-reason">Changes apply live to queued and newly started accounts (saved to panel-settings.json).</span>
+          </div>
+        </div>
+      </section>
+
       <div class="toolbar">
         <div class="search-box">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -1301,12 +1559,18 @@
         <div class="acct-title-group">
           <div class="acct-name-row">
             <span class="name"></span>
+            <select class="role-select" data-role="normal" aria-label="Account role" title="Normal: runs full booking immediately | Radar: monitors until site/login opens then triggers Standby | Standby: pre-opens site and waits quietly for Radar">
+              <option value="normal">Normal</option>
+              <option value="radar">Radar</option>
+              <option value="standby">Standby</option>
+            </select>
             <span class="badge"><span class="bdot"></span><span class="badge-text"></span></span>
           </div>
           <div class="acct-sub-row">
             <span class="num"></span>
             <span>•</span>
             <span class="docCountText"></span>
+            <span class="pool-tag" hidden></span>
           </div>
         </div>
       </div>
@@ -1316,9 +1580,21 @@
           <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
           <span>Start</span>
         </button>
+        <button type="button" class="sm accent" data-act="go-live" hidden title="Wake this Standby account to start logging in now">
+          <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>Go Live</span>
+        </button>
         <button type="button" class="sm danger-soft" data-act="stop">
           <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
           <span>Stop</span>
+        </button>
+        <button type="button" class="sm" data-act="peek" title="Live Peek: capture and view this account's current browser screen inside the panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Peek</span>
+        </button>
+        <button type="button" class="sm" data-act="focus" title="Bring this account's browser window to front">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+          <span>Focus</span>
         </button>
         <button type="button" class="sm" data-act="resume" title="Continue booking from the currently open page">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -1391,6 +1667,12 @@
         <span class="last">No activity yet.</span>
       </div>
 
+      <!-- Live Portal Alerts / Toasts -->
+      <div class="portal-alerts" hidden></div>
+
+      <!-- API Diagnostics Strip (429 / 5xx / Slow / Latency) -->
+      <div class="diag-strip" hidden></div>
+
       <!-- Attached Webfiles -->
       <div class="docs-strip docs"></div>
 
@@ -1413,6 +1695,7 @@
           <label><input type="checkbox" class="fFollow" checked> Auto-scroll</label>
           <div class="spacer"></div>
           <button type="button" class="xs copyLogsBtn">Copy logs</button>
+          <button type="button" class="xs downloadLogsBtn" title="Download complete persistent session log file from disk">Download .log</button>
         </div>
         <div class="logbox"></div>
       </details>
@@ -1432,6 +1715,26 @@
   </div>
 </div>
 
+<!-- Live Peek Screenshot Modal -->
+<div class="modal-backdrop" id="peekModal" role="dialog" aria-modal="true" aria-labelledby="peekTitle">
+  <div class="peek-box">
+    <div class="peek-hd">
+      <div>
+        <h3 id="peekTitle">Live Peek</h3>
+        <div class="peek-meta" id="peekMeta">Capturing browser screenshot…</div>
+      </div>
+      <div class="spacer"></div>
+      <button type="button" class="sm" id="peekRefreshBtn">↻ Refresh</button>
+      <button type="button" class="sm primary" id="peekFocusBtn">Bring Browser to Front</button>
+      <button type="button" class="sm" id="peekCloseBtn">Close</button>
+    </div>
+    <div class="peek-img-wrap" id="peekImgWrap">
+      <div class="peek-status" id="peekStatus">Capturing screenshot…</div>
+      <img id="peekImg" alt="Live browser preview" hidden>
+    </div>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
@@ -1444,6 +1747,8 @@
     idle: "Waiting — Press Resume",
     scheduled: "Scheduled",
     starting: "Starting…",
+    radar: "Radar Watching",
+    standby: "Standby — Ready on Portal",
     running: "Running",
     "needs-otp": "Needs OTP",
     payment: "Payment Ready",
@@ -2073,6 +2378,17 @@
     if (cards.has(name)) return cards.get(name);
     const node = $("#accountTpl").content.firstElementChild.cloneNode(true);
     node.querySelectorAll("[data-act]").forEach((btn) => btn.addEventListener("click", () => act(name, btn.dataset.act)));
+    $(".role-select", node).addEventListener("change", async (e) => {
+      const role = e.target.value;
+      e.target.dataset.role = role;
+      try {
+        await api("POST", `/api/accounts/${encodeURIComponent(name)}/role`, { role });
+        toast(`${name} role set to ${role.toUpperCase()}.`, "info", 2400);
+      } catch (error) {
+        toast(error.message, "err");
+        render(name);
+      }
+    });
     $(".otpSend", node).onclick = () => sendOtp(name);
     $(".otp-input", node).addEventListener("keydown", (e) => { if (e.key === "Enter") sendOtp(name); });
     $(".otp-input", node).addEventListener("input", (e) => { e.target.value = e.target.value.replace(/\D/g, "").slice(0, 8); });
@@ -2095,6 +2411,27 @@
       det.open = true;
       det.scrollIntoView({ behavior: "smooth", block: "nearest" });
     };
+    $(".downloadLogsBtn", node).onclick = async () => {
+      try {
+        const res = await fetch(`/api/accounts/${encodeURIComponent(name)}/logs/download`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${name}-session.log`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast(`Downloaded full session log for ${name}.`, "ok", 2600);
+      } catch (error) {
+        toast(error.message, "err");
+      }
+    };
 
     $("#accounts").appendChild(node);
     cards.set(name, node);
@@ -2112,18 +2449,41 @@
     $(".num", node).textContent = a.contact;
     $(".docCountText", node).textContent = `${a.docs.length} PDF${a.docs.length === 1 ? "" : "s"}`;
 
+    const poolTag = $(".pool-tag", node);
+    if (a.browserId) {
+      poolTag.hidden = false;
+      poolTag.textContent = `Pool #${a.browserId}`;
+    } else {
+      poolTag.hidden = true;
+    }
+
     const badge = $(".badge", node);
     badge.className = `badge ${a.state}`;
-    const badgeText = a.state === "scheduled" && a.startsAt
-      ? `Starts in ${Math.max(0, Math.ceil((a.startsAt - Date.now()) / 1000))}s`
-      : (STATE_LABELS[a.state] || a.state);
+    let badgeText = STATE_LABELS[a.state] || a.state;
+    if (a.state === "scheduled") {
+      if (systemState.circuitBreaker?.state === "open") badgeText = "Paused (Breaker)";
+      else if (a.startsAt) badgeText = `Starts in ${Math.max(0, Math.ceil((a.startsAt - Date.now()) / 1000))}s`;
+      else badgeText = "Queued (Waiting Slot)";
+    }
     $(".badge-text", badge).textContent = badgeText;
 
     const active = a.active;
+    const hasBrowser = active && a.state !== "scheduled";
+    const roleSel = $(".role-select", node);
+    const roleVal = a.role || "normal";
+    roleSel.value = roleVal;
+    roleSel.dataset.role = roleVal;
+    roleSel.disabled = active;
+
     node.querySelector("[data-act=start]").disabled = active || !a.docs.length;
+    const goLiveBtn = node.querySelector("[data-act=go-live]");
+    goLiveBtn.hidden = a.state !== "standby";
+    goLiveBtn.disabled = a.state !== "standby";
     node.querySelector("[data-act=stop]").disabled = !active;
-    node.querySelector("[data-act=resume]").disabled = !active || a.state === "scheduled";
-    node.querySelector("[data-act=reload]").disabled = !active || a.state === "scheduled";
+    node.querySelector("[data-act=peek]").disabled = !hasBrowser;
+    node.querySelector("[data-act=focus]").disabled = !hasBrowser;
+    node.querySelector("[data-act=resume]").disabled = !hasBrowser;
+    node.querySelector("[data-act=reload]").disabled = !hasBrowser;
     node.querySelector("[data-act=edit]").disabled = active;
     node.querySelector("[data-act=delete]").disabled = active;
 
@@ -2145,6 +2505,35 @@
     $(".elapsed", node).textContent = a.active && a.startedAt ? fmtDuration(Date.now() - a.startedAt) : "—";
     $(".started", node).textContent = a.startedAt ? `Started ${fmtTime(a.startedAt)}` : "Not started";
     $(".last", node).textContent = a.lastMessage || "No activity yet.";
+
+    const alertsEl = $(".portal-alerts", node);
+    const alerts = a.page?.alerts || [];
+    if (alerts.length) {
+      alertsEl.hidden = false;
+      alertsEl.textContent = `Portal Alert: ${alerts.join(" • ")}`;
+    } else {
+      alertsEl.hidden = true;
+    }
+
+    const diagEl = $(".diag-strip", node);
+    const m = a.metrics;
+    if (m && (m.totalApiCalls > 0 || m.http429 > 0 || m.http5xx > 0 || m.netErrors > 0)) {
+      diagEl.hidden = false;
+      const chips = [
+        `<span class="diag-chip">API: ${m.totalApiCalls}</span>`,
+        `<span class="diag-chip ${m.avgLatencyMs >= 4000 ? "warn" : ""}">Avg: ${m.avgLatencyMs}ms</span>`,
+        `<span class="diag-chip ${m.http429 > 0 ? "bad" : ""}">429: ${m.http429}</span>`,
+        `<span class="diag-chip ${m.http5xx > 0 ? "bad" : ""}">5xx: ${m.http5xx}</span>`,
+        `<span class="diag-chip ${m.netErrors > 0 ? "bad" : ""}">NetErr: ${m.netErrors}</span>`,
+        `<span class="diag-chip ${m.slowCalls > 0 ? "warn" : ""}">Slow(≥4s): ${m.slowCalls}</span>`,
+      ];
+      if (m.lastApiError) {
+        chips.push(`<span class="diag-chip warn" title="${esc(m.lastApiError)}">Last: ${esc(m.lastApiError.slice(0, 48))}</span>`);
+      }
+      diagEl.innerHTML = chips.join("");
+    } else {
+      diagEl.hidden = true;
+    }
 
     const banner = $(".banner", node);
     const bannerBtn = $(".banner-action", node);
@@ -2244,10 +2633,85 @@
     }
   }
 
+  // ---------- Live Peek Screenshot Modal & Sound Chime ----------
+  let peekAccountName = null;
+  function playChime() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const now = ctx.currentTime;
+      [587.33, 880].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.08, now + i * 0.14);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.14 + 0.28);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.14);
+        osc.stop(now + i * 0.14 + 0.3);
+      });
+    } catch {}
+  }
+
+  function closePeekModal() {
+    $("#peekModal").classList.remove("open");
+    peekAccountName = null;
+  }
+
+  async function refreshPeek() {
+    if (!peekAccountName) return;
+    const name = peekAccountName;
+    $("#peekRefreshBtn").disabled = true;
+    $("#peekMeta").textContent = "Capturing live screenshot…";
+    try {
+      const res = await api("POST", `/api/accounts/${encodeURIComponent(name)}/peek`);
+      if (peekAccountName !== name) return;
+      const img = $("#peekImg");
+      img.src = res.image;
+      img.hidden = false;
+      $("#peekStatus").hidden = true;
+      $("#peekMeta").textContent = `${res.title || "IVAC Portal"} • ${res.path || "/"} • Captured at ${fmtTime(res.time || Date.now())}`;
+    } catch (error) {
+      if (peekAccountName !== name) return;
+      $("#peekImg").hidden = true;
+      $("#peekStatus").hidden = false;
+      $("#peekStatus").textContent = `Could not capture screenshot: ${error.message}`;
+      $("#peekMeta").textContent = "Capture failed";
+    } finally {
+      $("#peekRefreshBtn").disabled = false;
+    }
+  }
+
+  function openPeekModal(name) {
+    peekAccountName = name;
+    $("#peekTitle").textContent = `Live Peek — ${name}`;
+    $("#peekImg").hidden = true;
+    $("#peekStatus").hidden = false;
+    $("#peekStatus").textContent = "Capturing screenshot…";
+    $("#peekModal").classList.add("open");
+    void refreshPeek();
+  }
+
+  $("#peekCloseBtn").onclick = closePeekModal;
+  $("#peekRefreshBtn").onclick = () => void refreshPeek();
+  $("#peekFocusBtn").onclick = async () => {
+    if (!peekAccountName) return;
+    try {
+      await api("POST", `/api/accounts/${encodeURIComponent(peekAccountName)}/focus`);
+      toast(`Brought ${peekAccountName}'s browser window to front.`, "ok", 2400);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+  $("#peekModal").addEventListener("click", (e) => { if (e.target === $("#peekModal")) closePeekModal(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#peekModal").classList.contains("open")) closePeekModal(); });
+
   // ---------- Actions ----------
   async function act(name, action) {
     try {
       if (action === "edit") return editAccount(name);
+      if (action === "peek") return openPeekModal(name);
       if (action === "delete") {
         const ok = await confirmDialog({
           title: `Delete "${name}"?`,
@@ -2264,6 +2728,8 @@
       await api("POST", `/api/accounts/${encodeURIComponent(name)}/${action}`);
       if (action === "start") toast(`Starting ${name}…`, "info", 2600);
       else if (action === "stop") toast(`Stopping ${name}…`, "warn", 2600);
+      else if (action === "focus") toast(`Brought ${name}'s browser window to front.`, "ok", 2200);
+      else if (action === "go-live") toast(`${name} woken from Standby — starting login!`, "ok", 3000);
       else if (action === "resume") toast(`Resume signal sent to ${name}.`, "info", 2600);
       else if (action === "reload") toast(`Reloaded booking code for ${name}.`, "ok", 2600);
     } catch (error) {
@@ -2333,12 +2799,206 @@
     }
   };
 
-  // ---------- Live SSE State ----------
+  // ---------- Hybrid Engine Controls, Circuit Breaker, Radar & Live SSE State ----------
+  let systemState = {
+    settings: {
+      maxConcurrent: 10,
+      staggerSeconds: 20,
+      poolMode: true,
+      maxContextsPerBrowser: 10,
+      blockAssets: true,
+      journalMode: "on-demand",
+      circuitBreakerEnabled: true,
+      headless: false,
+      radarIntervalSeconds: 10,
+    },
+    circuitBreaker: { enabled: true, state: "healthy", manualPause: false, reason: "", cooldownUntil: null, recent: {} },
+    pool: { browsers: 0, activeContexts: 0, maxContextsPerBrowser: 10, capacity: 0 },
+    radar: { status: "idle", detectedBy: null, detectedAt: null, detail: "", activeRadar: 0, activeStandby: 0 },
+    runningCount: 0,
+    queuedCount: 0,
+  };
+
+  function syncSettingsInputs(s) {
+    if (!s || !$("#settingsDrawer").hidden) return;
+    $("#setMaxConcurrent").value = String(s.maxConcurrent ?? 10);
+    $("#setStagger").value = String(s.staggerSeconds ?? 20);
+    $("#setContextsPerBrowser").value = String(s.maxContextsPerBrowser ?? 10);
+    $("#setRadarInterval").value = String(s.radarIntervalSeconds ?? 10);
+    $("#setPoolMode").checked = Boolean(s.poolMode);
+    $("#setBlockAssets").checked = Boolean(s.blockAssets);
+    $("#setOnDemandJournal").checked = s.journalMode !== "full";
+    $("#setCbEnabled").checked = Boolean(s.circuitBreakerEnabled);
+    $("#setHeadless").checked = Boolean(s.headless);
+  }
+
+  function renderSystemStatus(update) {
+    if (update) {
+      if (update.settings) systemState.settings = update.settings;
+      if (update.circuitBreaker) systemState.circuitBreaker = update.circuitBreaker;
+      if (update.pool) systemState.pool = update.pool;
+      if (update.radar) systemState.radar = update.radar;
+      if (update.runningCount !== undefined) systemState.runningCount = update.runningCount;
+      if (update.queuedCount !== undefined) systemState.queuedCount = update.queuedCount;
+    }
+
+    const s = systemState.settings;
+    const cb = systemState.circuitBreaker || {};
+    const pool = systemState.pool || {};
+    const radar = systemState.radar || {};
+    staggerSeconds = s.staggerSeconds ?? staggerSeconds;
+
+    const pill = $("#cbPill");
+    const reasonEl = $("#cbReason");
+    const cbBtn = $("#cbToggleBtn");
+
+    if (cb.state === "open") {
+      const rem = cb.cooldownUntil ? Math.max(0, Math.ceil((cb.cooldownUntil - Date.now()) / 1000)) : 0;
+      pill.className = "health-pill open";
+      pill.textContent = cb.manualPause ? "⏸ Queue Paused" : `⛔ Circuit Open (${rem}s)`;
+      reasonEl.textContent = cb.reason || "New launches paused to protect portal";
+      cbBtn.textContent = "Reset & Resume";
+    } else if (cb.state === "degraded") {
+      pill.className = "health-pill degraded";
+      pill.textContent = "▲ Portal Degraded (2× Gap)";
+      reasonEl.textContent = cb.reason || "Slowing launches due to heavy traffic";
+      cbBtn.textContent = "Pause Queue";
+    } else {
+      pill.className = "health-pill";
+      pill.textContent = cb.enabled === false ? "● Breaker Off" : "● Portal Healthy";
+      const r = cb.recent || {};
+      const errs = (r.count429 || 0) + (r.count5xx || 0) + (r.countNet || 0);
+      reasonEl.textContent = errs > 0 ? `60s: 429=${r.count429 || 0}, 5xx=${r.count5xx || 0}, Net=${r.countNet || 0}` : "";
+      cbBtn.textContent = "Pause Queue";
+    }
+
+    const poolChip = $("#poolChip");
+    if (!s.poolMode) {
+      poolChip.textContent = "Pool: Dedicated";
+    } else if (pool.browsers > 0) {
+      poolChip.textContent = `Pool: ${pool.browsers} Chrome • ${pool.activeContexts}/${pool.capacity} slots`;
+    } else {
+      poolChip.textContent = `Pool: Ready (${s.maxContextsPerBrowser}/Chrome)`;
+    }
+
+    // Radar & Standby status strip
+    const radarPill = $("#radarPill");
+    const radarDetail = $("#radarDetail");
+    if (radar.status === "open") {
+      radarPill.className = "radar-pill open";
+      radarPill.textContent = `● Portal Open (${radar.detectedBy || "radar"})`;
+      radarDetail.textContent = `${radar.detail || "Login/booking detected open"}${radar.detectedAt ? ` at ${fmtTime(radar.detectedAt)}` : ""}`;
+      $("#resetRadarBtn").hidden = false;
+    } else if (radar.status === "watching") {
+      radarPill.className = "radar-pill watching";
+      radarPill.textContent = `● Radar Watching (${radar.activeRadar || 1})`;
+      radarDetail.textContent = `Checking every ${s.radarIntervalSeconds ?? 10}s — Standby accounts will auto-start login when portal opens`;
+      $("#resetRadarBtn").hidden = true;
+    } else {
+      radarPill.className = "radar-pill";
+      radarPill.textContent = "Radar: Idle";
+      radarDetail.textContent = "Set 1–2 accounts to Radar and others to Standby so they pre-open the site without retrying login";
+      $("#resetRadarBtn").hidden = true;
+    }
+    const standbyCount = radar.activeStandby || 0;
+    $("#standbyChip").textContent = `Standby: ${standbyCount} ready`;
+    $("#triggerStandbyBtn").disabled = standbyCount === 0;
+
+    $("#queueChip").textContent = `Active ${systemState.runningCount}/${s.maxConcurrent}${systemState.queuedCount ? ` • Queued ${systemState.queuedCount}` : ""}`;
+    $("#staggerHint").textContent = `Gap: ${staggerSeconds}s${cb.state === "degraded" ? " (2×)" : ""} • ${s.blockAssets ? "Assets Blocked" : "Full Assets"} • ${s.journalMode === "full" ? "Full Journal" : "On-Demand Journal"}`;
+    $("#startAll").title = `Queues up to ${s.maxConcurrent} concurrent accounts (${staggerSeconds}s stagger)`;
+    syncSettingsInputs(s);
+  }
+
+  $("#settingsToggleBtn").onclick = () => {
+    const drawer = $("#settingsDrawer");
+    const opening = drawer.hidden;
+    drawer.hidden = !drawer.hidden;
+    if (opening) {
+      $("#setMaxConcurrent").value = String(systemState.settings.maxConcurrent ?? 10);
+      $("#setStagger").value = String(systemState.settings.staggerSeconds ?? 20);
+      $("#setContextsPerBrowser").value = String(systemState.settings.maxContextsPerBrowser ?? 10);
+      $("#setRadarInterval").value = String(systemState.settings.radarIntervalSeconds ?? 10);
+      $("#setPoolMode").checked = Boolean(systemState.settings.poolMode);
+      $("#setBlockAssets").checked = Boolean(systemState.settings.blockAssets);
+      $("#setOnDemandJournal").checked = systemState.settings.journalMode !== "full";
+      $("#setCbEnabled").checked = Boolean(systemState.settings.circuitBreakerEnabled);
+      $("#setHeadless").checked = Boolean(systemState.settings.headless);
+    }
+  };
+
+  $("#saveSettingsBtn").onclick = async () => {
+    try {
+      const result = await api("POST", "/api/settings", {
+        maxConcurrent: Number($("#setMaxConcurrent").value),
+        staggerSeconds: Number($("#setStagger").value),
+        maxContextsPerBrowser: Number($("#setContextsPerBrowser").value),
+        radarIntervalSeconds: Number($("#setRadarInterval").value),
+        poolMode: $("#setPoolMode").checked,
+        blockAssets: $("#setBlockAssets").checked,
+        journalMode: $("#setOnDemandJournal").checked ? "on-demand" : "full",
+        circuitBreakerEnabled: $("#setCbEnabled").checked,
+        headless: $("#setHeadless").checked,
+      });
+      $("#settingsDrawer").hidden = true;
+      renderSystemStatus(result);
+      toast("Hybrid engine settings saved and applied.", "ok", 3000);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
+  $("#setOthersStandbyBtn").onclick = async () => {
+    try {
+      const res = await api("POST", "/api/radar/set-others-standby");
+      renderSystemStatus(res);
+      toast(`Marked ${res.updated.length} non-Radar account(s) as Standby.`, "ok", 3200);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
+  $("#triggerStandbyBtn").onclick = async () => {
+    try {
+      const res = await api("POST", "/api/radar/trigger");
+      renderSystemStatus(res);
+      playChime();
+      toast(`Go-Live sent to ${res.triggered.length} Standby account(s)!`, "ok", 4500);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
+  $("#resetRadarBtn").onclick = async () => {
+    try {
+      const res = await api("POST", "/api/radar/reset");
+      renderSystemStatus(res);
+      toast("Radar status reset.", "info", 2500);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
+  $("#cbToggleBtn").onclick = async () => {
+    try {
+      if (systemState.circuitBreaker?.state === "open") {
+        const res = await api("POST", "/api/circuit-breaker/reset");
+        renderSystemStatus(res);
+        toast("Circuit breaker reset — queued launches resumed.", "ok", 3000);
+      } else {
+        const res = await api("POST", "/api/circuit-breaker/pause", { reason: "Paused by operator from dashboard" });
+        renderSystemStatus(res);
+        toast("Launch queue paused (running accounts stay active).", "warn", 3500);
+      }
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
   async function loadState() {
     const state = await fetch("/api/state").then((r) => r.json());
     staggerSeconds = state.staggerSeconds;
-    $("#staggerHint").textContent = `Start All gap: ${staggerSeconds}s between accounts`;
-    $("#startAll").title = `Starts eligible accounts ${staggerSeconds}s apart to prevent portal rate-limiting`;
+    renderSystemStatus(state);
     const notice = $("#legacyNotice");
     if (state.legacy) {
       notice.className = "notice show";
@@ -2365,7 +3025,13 @@
     source.onmessage = (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "account") upsertAccount(message.account);
-      else if (message.type === "log") {
+      else if (message.type === "system") {
+        renderSystemStatus(message);
+        for (const [name, a] of accounts) if (a.state === "scheduled") render(name);
+      } else if (message.type === "portal-open") {
+        playChime();
+        toast(`Portal Open detected by ${message.source}! Waking ${message.triggeredCount || 0} Standby account(s)...`, "ok", 7000);
+      } else if (message.type === "log") {
         const list = logs.get(message.name) || [];
         list.push(message.entry);
         if (list.length > 400) list.splice(0, list.length - 400);
@@ -2381,6 +3047,9 @@
   }
 
   setInterval(() => {
+    if (systemState.circuitBreaker?.state === "open" && systemState.circuitBreaker?.cooldownUntil) {
+      renderSystemStatus();
+    }
     for (const [name, a] of accounts) {
       const node = cards.get(name);
       if (!node) continue;

@@ -15,18 +15,27 @@ async function reloadBookingCode() {
   booking = await import(`${BOOKING_MODULE_URL.href}?v=${Date.now()}`);
 }
 import { log } from "./logger.js";
-import { startPageJournal } from "./journal.js";
-import { gotoWithRecovery } from "./resilience.js";
+import { captureErrorSnapshot, startPageJournal } from "./journal.js";
+import { detectServerTrouble, gotoWithRecovery } from "./resilience.js";
 import { parseAccounts, planAccountRuns, safeAccountName } from "./accounts.js";
+import {
+  LIGHTWEIGHT_CHROME_ARGS,
+  installLightweightRouting,
+  loadExistingSessionPath,
+  saveContextSession,
+} from "./browser-pool.js";
 import { spawn } from "node:child_process";
 import {
   PANEL_MODE,
   createPanelPrompts,
   forwardConsoleToPanel,
   nextPanelCommand,
+  onPanelFocus,
+  onPanelPeek,
   onPanelStop,
   panelOtp,
   sendToPanel,
+  waitForGoLive,
 } from "./panel-bridge.js";
 import {
   fillLabeledFields,
@@ -47,6 +56,9 @@ const CREDENTIALS_PATH = process.env.IVAC_CREDENTIALS
 const DOC_ROOT = process.env.IVAC_DOC_ROOT
   ? path.resolve(process.env.IVAC_DOC_ROOT)
   : path.join(PROJECT_ROOT, "doc_file");
+const SESSIONS_ROOT = process.env.IVAC_SESSIONS_ROOT
+  ? path.resolve(process.env.IVAC_SESSIONS_ROOT)
+  : path.join(PROJECT_ROOT, "sessions");
 // Set by the multi-account launcher for each account's own window.
 const ACTIVE_USER = (process.env.IVAC_USER || "").trim() || null;
 // Every account gets its own browser profile, so logins never mix.
@@ -198,7 +210,53 @@ function safeUrlForLog(value, credentials) {
   }
 }
 
+function safePathForLog(value, credentials) {
+  try {
+    const url = new URL(String(value || ""));
+    const cleanPath = (url.pathname || "/").replace(/\d{6,}/g, "[digits]");
+    return redactSensitiveText(cleanPath, credentials);
+  } catch {
+    return "/";
+  }
+}
+
+const API_MONITOR_IGNORED_TYPES = new Set(["image", "font", "stylesheet", "media"]);
+const API_MONITOR_IGNORED_URLS = /analytics|gtag|doubleclick|clarity|hotjar|google|challenges\.cloudflare\.com|cloudflareinsights/i;
+const SLOW_API_MS = 4_000;
+
+function extractSafeErrorSnippet(rawText, credentials) {
+  const trimmed = String(rawText || "").trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = JSON.parse(trimmed);
+    const msg = parsed?.message || parsed?.error || parsed?.detail || parsed?.msg || "";
+    if (typeof msg === "string" && msg.trim()) {
+      return redactSensitiveText(msg.replace(/\s+/g, " ").trim().slice(0, 140), credentials);
+    }
+  } catch {}
+  if (/^<!doctype|^<html/i.test(trimmed)) {
+    const title = trimmed.match(/<title[^>]*>([^<]{1,100})<\/title>/i)?.[1]?.trim();
+    return title ? redactSensitiveText(title, credentials) : "";
+  }
+  return redactSensitiveText(trimmed.replace(/\s+/g, " ").slice(0, 140), credentials);
+}
+
 function installBrowserErrorReporting(page, credentials) {
+  const requestStartTimes = new WeakMap();
+  let lastSnapshotAt = 0;
+  const maybeSnapshot = (reason) => {
+    const now = Date.now();
+    if (now - lastSnapshotAt < 15_000) return;
+    lastSnapshotAt = now;
+    void captureErrorSnapshot(page, reason);
+  };
+
+  page.on("request", (request) => {
+    const type = request.resourceType();
+    if (API_MONITOR_IGNORED_TYPES.has(type)) return;
+    requestStartTimes.set(request, Date.now());
+  });
+
   page.on("console", (message) => {
     if (message.type() !== "error") {
       return;
@@ -224,26 +282,88 @@ function installBrowserErrorReporting(page, credentials) {
     log.error(`Browser script error: ${redactSensitiveText(msg, credentials)}`);
   });
 
+  page.on("response", async (response) => {
+    const request = response.request();
+    const url = response.url();
+    const resourceType = request.resourceType();
+    if (API_MONITOR_IGNORED_TYPES.has(resourceType)) return;
+    if (API_MONITOR_IGNORED_URLS.test(url)) return;
+    if (!["xhr", "fetch", "document"].includes(resourceType)) return;
+
+    const status = response.status();
+    const started = requestStartTimes.get(request);
+    const durationMs = started ? Math.max(0, Date.now() - started) : 0;
+    const reqPath = safePathForLog(url, credentials);
+    const method = request.method();
+
+    if (status >= 400) {
+      let snippet = "";
+      try {
+        const ct = response.headers()["content-type"] || "";
+        if (/json|text|html/i.test(ct)) {
+          snippet = extractSafeErrorSnippet(await response.text(), credentials);
+        }
+      } catch {}
+      const msg = `API Error: ${method} ${reqPath} → HTTP ${status} (${durationMs}ms)${snippet ? ` — "${snippet}"` : ""}`;
+      if (status === 429 || status >= 500) {
+        log.error(msg);
+        maybeSnapshot(`http-${status}`);
+      } else {
+        log.warn(msg);
+      }
+      sendToPanel({
+        type: "api-metric",
+        method,
+        path: reqPath,
+        status,
+        durationMs,
+        errorText: snippet,
+      });
+      return;
+    }
+
+    const slow = durationMs >= SLOW_API_MS;
+    if (slow) {
+      log.warn(`Slow API: ${method} ${reqPath} → HTTP ${status} (${durationMs}ms)`);
+    }
+    sendToPanel({
+      type: "api-metric",
+      method,
+      path: reqPath,
+      status,
+      durationMs,
+      slow,
+    });
+  });
+
   page.on("requestfailed", (request) => {
     const url = request.url();
     const resourceType = request.resourceType();
-    if (["image", "font", "stylesheet", "media"].includes(resourceType)) {
+    if (API_MONITOR_IGNORED_TYPES.has(resourceType)) {
       return;
     }
-    if (
-      /analytics|gtag|doubleclick|clarity|hotjar|google|challenges\.cloudflare\.com|cloudflareinsights/i.test(
-        url,
-      )
-    ) {
+    if (API_MONITOR_IGNORED_URLS.test(url)) {
       return;
     }
     const failure = request.failure();
     if (failure?.errorText === "net::ERR_ABORTED") {
       return;
     }
+    const started = requestStartTimes.get(request);
+    const durationMs = started ? Math.max(0, Date.now() - started) : 0;
+    const reqPath = safePathForLog(url, credentials);
     log.warn(
-      `Request failed: ${request.method()} ${safeUrlForLog(url, credentials)} (${failure?.errorText || "unknown"})`,
+      `Request failed: ${request.method()} ${safeUrlForLog(url, credentials)}${reqPath} (${failure?.errorText || "unknown"}, ${durationMs}ms)`,
     );
+    sendToPanel({
+      type: "api-metric",
+      failed: true,
+      method: request.method(),
+      path: reqPath,
+      durationMs,
+      errorText: failure?.errorText || "unknown",
+    });
+    maybeSnapshot("net-fail");
   });
 }
 
@@ -474,18 +594,41 @@ async function main() {
     }
   }
 
-  const context = await chromium.launchPersistentContext(BROWSER_DATA_PATH, {
-    channel: "chrome",
-    headless: true,
-    viewport: null,
-    args: [
-      "--headless=new", // এটিই আসল হেডেড ব্রাউজারের মতো আচরণ করাবে
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--window-size=1920,1080", // হেডলেসে স্ক্রিন সাইজ 0x0 হওয়া আটকাবে
-    ],
-  });
+  const pooledWs = (process.env.IVAC_BROWSER_WS || "").trim();
+  const blockAssets = process.env.IVAC_BLOCK_ASSETS !== "0";
+  const journalMode = process.env.IVAC_JOURNAL_MODE || "on-demand";
+  let pooledBrowser = null;
+  let context;
+
+  if (pooledWs) {
+    pooledBrowser = await chromium.connect(pooledWs);
+    const sessionPath = ACTIVE_USER
+      ? await loadExistingSessionPath(SESSIONS_ROOT, ACTIVE_USER)
+      : undefined;
+    context = await pooledBrowser.newContext({
+      viewport: null,
+      ...(sessionPath ? { storageState: sessionPath } : {}),
+    });
+    log.info(
+      `Connected to shared browser pool (isolated context${sessionPath ? ", restored saved session" : ""}).`,
+    );
+  } else {
+    const headless = process.env.IVAC_HEADLESS === "1";
+    context = await chromium.launchPersistentContext(BROWSER_DATA_PATH, {
+      channel: "chrome",
+      headless,
+      viewport: null,
+      args: [
+        ...LIGHTWEIGHT_CHROME_ARGS,
+        ...(headless ? ["--window-size=1280,800"] : []),
+      ],
+    });
+  }
+
+  const assetRouter = await installLightweightRouting(context, { blockAssets });
+  if (blockAssets) {
+    log.info("Lightweight asset blocking enabled (images, fonts, media & trackers skipped).");
+  }
 
   await context.addInitScript(() => {
     const unblock = () => {
@@ -506,8 +649,18 @@ async function main() {
   });
 
   const page = context.pages()[0] || (await context.newPage());
+  let lastSessionSaveAt = 0;
+  const persistSessionIfPooled = () => {
+    if (!pooledBrowser || !ACTIVE_USER) return;
+    const now = Date.now();
+    if (now - lastSessionSaveAt < 10_000) return;
+    lastSessionSaveAt = now;
+    void saveContextSession(context, SESSIONS_ROOT, ACTIVE_USER);
+  };
   const stopJournal = startPageJournal(context, {
-    onPage: (entry) =>
+    mode: journalMode,
+    onPage: (entry) => {
+      persistSessionIfPooled();
       sendToPanel({
         type: "page",
         tab: entry.tab,
@@ -520,14 +673,43 @@ async function main() {
           .map((button) => button.text)
           .slice(0, 8),
         alerts: entry.alerts,
-      }),
+      });
+    },
   });
   installBrowserErrorReporting(page, credentials);
   context.on("page", (newPage) => {
     installBrowserErrorReporting(newPage, credentials);
   });
+
+  const getLatestOpenPage = () => {
+    const open = context.pages().filter((candidate) => !candidate.isClosed());
+    return open[open.length - 1] || page;
+  };
+
+  onPanelPeek(async () => {
+    const target = getLatestOpenPage();
+    if (!target || target.isClosed()) {
+      throw new Error("No open browser page available.");
+    }
+    const buf = await target.screenshot({ type: "jpeg", quality: 65, timeout: 6_000 });
+    return {
+      image: `data:image/jpeg;base64,${buf.toString("base64")}`,
+      path: safePathForLog(target.url(), credentials),
+      title: await target.title().catch(() => ""),
+      time: Date.now(),
+    };
+  });
+
+  onPanelFocus(async () => {
+    const target = getLatestOpenPage();
+    if (target && !target.isClosed()) {
+      await target.bringToFront();
+    }
+  });
+
   let stopWatching = () => {};
   let stopSourceWatch = () => {};
+  const stopController = new AbortController();
   // In the panel, questions are answered there and the OTP typed there is
   // filled into the portal; in a terminal they use the keyboard as before.
   const prompts = PANEL_MODE
@@ -538,20 +720,69 @@ async function main() {
     log.warn(
       "Stop requested from the control panel; closing this account's browser.",
     );
+    stopController.abort();
     context.close().catch(() => {});
   });
-  sendToPanel({ type: "state", state: "running" });
+
+  const runMode = (process.env.IVAC_RUN_MODE || "normal").trim().toLowerCase();
+  const radarIntervalMs = Math.max(3_000, Number(process.env.IVAC_RADAR_INTERVAL_MS || 10_000));
+
+  async function checkPortalOpenForLogin(targetPage) {
+    if (targetPage.isClosed()) return { open: false, reason: "Page closed" };
+    const trouble = await detectServerTrouble(targetPage);
+    if (trouble) return { open: false, reason: `${trouble.label}${trouble.text ? `: ${trouble.text}` : ""}` };
+
+    await booking.dismissPortalNotices(targetPage).catch(() => {});
+    const detected = await booking.detectPortalPage(targetPage).catch(() => ({ key: "unknown", label: "Unknown" }));
+    if (["otp", "booking-guide", "webfile", "mission", "waiting", "time-slot", "declaration", "payment"].includes(detected.key)) {
+      return { open: true, detail: `Portal live on ${detected.label}` };
+    }
+    const passwordInput = targetPage.locator('input[type="password"]').first();
+    if (await passwordInput.isVisible().catch(() => false)) {
+      return { open: true, detail: "Sign-in form is open and live" };
+    }
+
+    // If on the landing page, try clicking "Take Your Appointment" / "Book Your Appointment"
+    // to verify whether the portal actually opens the Sign-In or Booking page.
+    const entryBtn = targetPage
+      .locator('a, button, [role="button"]')
+      .filter({ hasText: /take your appointment|book your appointment|sign in/i })
+      .first();
+    if (await entryBtn.isVisible().catch(() => false) && await entryBtn.isEnabled().catch(() => false)) {
+      await entryBtn.click({ timeout: 5_000 }).catch(() => {});
+      await targetPage.waitForTimeout(1_800).catch(() => {});
+      await booking.dismissPortalNotices(targetPage).catch(() => {});
+      const afterTrouble = await detectServerTrouble(targetPage);
+      if (afterTrouble) {
+        return { open: false, reason: afterTrouble.label };
+      }
+      if (await targetPage.locator('input[type="password"]').first().isVisible().catch(() => false)) {
+        return { open: true, detail: "Sign-in option opened after clicking Take Your Appointment" };
+      }
+      const afterDetected = await booking.detectPortalPage(targetPage).catch(() => ({ key: "unknown", label: "Unknown" }));
+      if (["login", "otp", "booking-guide", "webfile", "mission", "waiting", "time-slot", "declaration", "payment"].includes(afterDetected.key)) {
+        return { open: true, detail: `Booking entry opened (${afterDetected.label})` };
+      }
+      const text = await readPageText(targetPage).catch(() => "");
+      if (/closed|not available|maintenance|try again later|no slot|unavailable/i.test(text)) {
+        return { open: false, reason: "Portal shows closed / unavailable notice" };
+      }
+    }
+    return { open: false, reason: "Sign-in / appointment entry not open yet" };
+  }
+
+  sendToPanel({ type: "state", state: runMode === "radar" ? "radar" : "running" });
 
   try {
     log.banner(
       "IVAC VISA BOOKING AUTOMATION",
       ACTIVE_USER
-        ? `Account: ${ACTIVE_USER} • Stops Safely at Payment Step`
+        ? `Account: ${ACTIVE_USER} (${runMode.toUpperCase()}) • Stops Safely at Payment Step`
         : "Guided Flow • Stops Safely at Payment Step",
     );
     if (ACTIVE_USER) {
       log.info(
-        `Account ${ACTIVE_USER}: documents from doc_file/${safeAccountName(ACTIVE_USER)}, browser profile user-data/${safeAccountName(ACTIVE_USER)}.`,
+        `Account ${ACTIVE_USER}: mode=${runMode}, documents from doc_file/${safeAccountName(ACTIVE_USER)}.`,
       );
     }
     log.info(`Connecting to IVAC portal (${PORTAL_URL})...`);
@@ -568,6 +799,47 @@ async function main() {
       log.success("Sign-in credentials loaded from credentials.json");
     } else {
       log.info("Manual sign-in mode (credentials.json not found)");
+    }
+
+    if (runMode === "standby") {
+      sendToPanel({ type: "state", state: "standby" });
+      log.step("Standby", "Browser is open on portal — waiting quietly for Radar signal (no login attempts yet)");
+      try {
+        await waitForGoLive(stopController.signal);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        throw err;
+      }
+      if (page.isClosed()) return;
+      sendToPanel({ type: "state", state: "running" });
+      log.success("Go-Live signal received! Starting login & booking flow now...");
+      if (await detectServerTrouble(page)) {
+        await gotoWithRecovery(page, PORTAL_URL);
+        await booking.dismissPortalNotices(page);
+      }
+    } else if (runMode === "radar") {
+      sendToPanel({ type: "state", state: "radar" });
+      log.step("Radar", `Monitoring portal every ${Math.round(radarIntervalMs / 1000)}s for login/booking opening...`);
+      let attempt = 0;
+      while (!page.isClosed() && !stopController.signal.aborted) {
+        attempt += 1;
+        const check = await checkPortalOpenForLogin(page);
+        if (check.open) {
+          log.success(`RADAR ALERT: ${check.detail}! Triggering all Standby accounts...`);
+          sendToPanel({ type: "portal-open", detail: check.detail });
+          sendToPanel({ type: "state", state: "running" });
+          break;
+        }
+        log.waiting(`Radar check #${attempt}: ${check.reason}. Checking again in ${Math.round(radarIntervalMs / 1000)}s...`);
+        await new Promise((resolve) => {
+          const t = setTimeout(resolve, radarIntervalMs);
+          stopController.signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+        });
+        if (page.isClosed() || stopController.signal.aborted) return;
+        await page.goto(PORTAL_URL, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+        await page.waitForTimeout(800).catch(() => {});
+      }
+      if (page.isClosed() || stopController.signal.aborted) return;
     }
 
     await runFlowSafely(page, prompts, credentials);
@@ -755,11 +1027,20 @@ async function main() {
     if (!context.pages().some((openPage) => !openPage.isClosed())) {
       log.warn("The browser window was closed, so the helper is exiting.");
     }
+    if (blockAssets) {
+      log.info(`Lightweight asset blocker skipped ${assetRouter.blockedCount()} heavy resource request(s).`);
+    }
+    if (pooledBrowser && ACTIVE_USER) {
+      await saveContextSession(context, SESSIONS_ROOT, ACTIVE_USER);
+    }
     stopWatching();
     stopSourceWatch();
     stopJournal();
     prompts.close();
     await context.close().catch(() => {});
+    if (pooledBrowser) {
+      await pooledBrowser.close().catch(() => {});
+    }
   }
 }
 

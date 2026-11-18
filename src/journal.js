@@ -20,10 +20,11 @@ const JOURNAL_USER = (process.env.IVAC_USER || "").trim() ? safeAccountName(proc
 export const JOURNAL_DIR = JOURNAL_USER ? path.join(PROJECT_ROOT, "logs", JOURNAL_USER) : path.join(PROJECT_ROOT, "logs");
 const JOURNAL_FILE = path.join(JOURNAL_DIR, "page-journal.jsonl");
 const PAGES_DIR = path.join(JOURNAL_DIR, "pages");
-const CHECK_INTERVAL_MS = 5_000;
+const CHECK_INTERVAL_FULL_MS = 5_000;
+const CHECK_INTERVAL_ON_DEMAND_MS = 15_000;
 
 // Runs inside the page.
-function describePage() {
+function describePage(includeHtml = true) {
   const clean = (value, max = 120) => String(value || "")
     .replace(/\s+/g, " ")
     .replace(/\d{6,}/g, (digits) => `[${digits.length} digits]`)
@@ -92,14 +93,17 @@ function describePage() {
     .filter(Boolean)
     .slice(0, 5);
 
-  const clone = document.documentElement.cloneNode(true);
-  clone.querySelectorAll("script, style, noscript, template, svg, [class*='marquee']").forEach((node) => node.remove());
-  clone.querySelectorAll("input, textarea").forEach((node) => {
-    if (node.hasAttribute("value")) node.setAttribute("value", "");
-    node.textContent = "";
-  });
-  clone.querySelectorAll("img").forEach((node) => node.removeAttribute("src"));
-  const html = clone.outerHTML.replace(/\d{6,}/g, (digits) => `[${digits.length} digits]`);
+  let html = "";
+  if (includeHtml) {
+    const clone = document.documentElement.cloneNode(true);
+    clone.querySelectorAll("script, style, noscript, template, svg, [class*='marquee']").forEach((node) => node.remove());
+    clone.querySelectorAll("input, textarea").forEach((node) => {
+      if (node.hasAttribute("value")) node.setAttribute("value", "");
+      node.textContent = "";
+    });
+    clone.querySelectorAll("img").forEach((node) => node.removeAttribute("src"));
+    html = clone.outerHTML.replace(/\d{6,}/g, (digits) => `[${digits.length} digits]`);
+  }
 
   return {
     title: clean(document.title, 100),
@@ -127,18 +131,19 @@ function signatureOf(entry) {
     entry.buttons.map((button) => `${button.text}:${button.disabled}`),
     entry.fields.map((field) => `${field.type}:${field.name}:${field.disabled}`),
     entry.dialogs,
+    entry.alerts,
     entry.turnstile.solved,
   ]);
 }
 
-export async function recordPage(page, { tab = 1, reason = "change" } = {}) {
+export async function recordPage(page, { tab = 1, reason = "change", includeHtml = true } = {}) {
   if (page.isClosed()) return null;
   let pathname = "";
   try {
     pathname = new URL(page.url()).pathname;
   } catch {}
   const detected = await detectPortalPage(page).catch(() => ({ key: "unknown", label: "Unrecognized page" }));
-  const described = await page.evaluate(describePage).catch(() => null);
+  const described = await page.evaluate(describePage, includeHtml).catch(() => null);
   if (!described) return null;
   const { html, ...structure } = described;
   return {
@@ -152,18 +157,39 @@ export async function recordPage(page, { tab = 1, reason = "change" } = {}) {
   };
 }
 
-async function saveEntry(entry) {
+async function saveEntry(entry, { writeHtml = true, uniqueSuffix = "" } = {}) {
   await mkdir(PAGES_DIR, { recursive: true });
   const { html, ...structure } = entry;
   await appendFile(JOURNAL_FILE, `${JSON.stringify(structure)}\n`, "utf8");
-  const safePath = (entry.path || "root").replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "root";
-  await writeFile(path.join(PAGES_DIR, `${entry.page.key}__${safePath}.html`), html, "utf8");
+  if (writeHtml && html) {
+    const safePath = (entry.path || "root").replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "root";
+    const suffix = uniqueSuffix ? `__${uniqueSuffix}` : "";
+    await writeFile(path.join(PAGES_DIR, `${entry.page.key}__${safePath}${suffix}.html`), html, "utf8");
+  }
 }
 
-// Records every tab whenever its page changes. Runs for the whole session,
-// including while the booking flow is working.
-export function startPageJournal(context, { onPage = null } = {}) {
+export async function captureErrorSnapshot(page, reason = "error") {
+  if (!page || page.isClosed()) return null;
+  try {
+    const entry = await recordPage(page, { reason: `snapshot:${reason}`, includeHtml: true });
+    if (!entry) return null;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeReason = String(reason || "err").replace(/[^a-z0-9_-]+/gi, "_").slice(0, 32);
+    await saveEntry(entry, { writeHtml: true, uniqueSuffix: `${safeReason}_${stamp}` });
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+// Records every tab whenever its page changes.
+// In "on-demand" mode (default), skips expensive 5s DOM cloning and only captures
+// full HTML snapshots on unrecognized pages or visible portal alerts.
+export function startPageJournal(context, { onPage = null, mode = process.env.IVAC_JOURNAL_MODE || "on-demand" } = {}) {
+  const fullMode = mode === "full";
+  const checkIntervalMs = fullMode ? CHECK_INTERVAL_FULL_MS : CHECK_INTERVAL_ON_DEMAND_MS;
   const lastSignature = new Map();
+  const lastAlertText = new Map();
   let busy = false;
 
   const recordAll = async (reason) => {
@@ -173,15 +199,38 @@ export function startPageJournal(context, { onPage = null } = {}) {
       const pages = context.pages();
       for (let index = 0; index < pages.length; index += 1) {
         const page = pages[index];
-        const entry = await recordPage(page, { tab: index + 1, reason });
+        const entry = await recordPage(page, { tab: index + 1, reason, includeHtml: fullMode });
         if (!entry) continue;
         const signature = signatureOf(entry);
         if (lastSignature.get(page) === signature) continue;
         lastSignature.set(page, signature);
-        await saveEntry(entry);
-        try { onPage?.(entry); } catch {}
-        const enabled = entry.buttons.filter((button) => button.visible && !button.disabled).map((button) => button.text).slice(0, 4);
-        console.log(`${log.colors.gray}📝 Journal: tab ${entry.tab} ${entry.path || "/"} → ${entry.page.label}${enabled.length ? ` | buttons: ${enabled.join(", ")}` : ""}${entry.turnstile.present ? ` | Cloudflare: ${entry.turnstile.solved ? "passed" : entry.turnstile.onScreen ? "on screen, not passed" : "off screen"}` : ""}${log.colors.reset}`);
+
+        // In on-demand mode, capture HTML only if the page is unrecognized or showing an alert
+        let entryToSave = entry;
+        let shouldWriteHtml = fullMode;
+        if (!fullMode && (entry.page.key === "unknown" || entry.alerts.length > 0)) {
+          const withHtml = await recordPage(page, { tab: index + 1, reason: `${reason}:detail`, includeHtml: true });
+          if (withHtml) {
+            entryToSave = withHtml;
+            shouldWriteHtml = true;
+          }
+        }
+        await saveEntry(entryToSave, { writeHtml: shouldWriteHtml });
+        try { onPage?.(entryToSave); } catch {}
+
+        // Surface new portal toast/alert text directly in the activity log
+        if (entryToSave.alerts.length > 0) {
+          const alertJoined = entryToSave.alerts.join(" | ");
+          if (lastAlertText.get(page) !== alertJoined) {
+            lastAlertText.set(page, alertJoined);
+            log.warn(`Portal alert on ${entryToSave.path || "/"}: ${alertJoined}`);
+          }
+        } else {
+          lastAlertText.delete(page);
+        }
+
+        const enabled = entryToSave.buttons.filter((button) => button.visible && !button.disabled).map((button) => button.text).slice(0, 4);
+        console.log(`${log.colors.gray}📝 Journal: tab ${entryToSave.tab} ${entryToSave.path || "/"} → ${entryToSave.page.label}${enabled.length ? ` | buttons: ${enabled.join(", ")}` : ""}${entryToSave.turnstile.present ? ` | Cloudflare: ${entryToSave.turnstile.solved ? "passed" : entryToSave.turnstile.onScreen ? "on screen, not passed" : "off screen"}` : ""}${log.colors.reset}`);
       }
     } catch (error) {
       console.log(`${log.colors.gray}📝 Journal skipped a check: ${error.message}${log.colors.reset}`);
@@ -195,15 +244,15 @@ export function startPageJournal(context, { onPage = null } = {}) {
     page.on("framenavigated", (frame) => {
       if (frame !== page.mainFrame()) return;
       clearTimeout(timers.get(page));
-      timers.set(page, setTimeout(() => recordAll("navigation"), 2_000));
+      timers.set(page, setTimeout(() => recordAll("navigation"), fullMode ? 2_000 : 1_200));
     });
   };
   context.pages().forEach(attach);
   context.on("page", attach);
 
-  const interval = setInterval(() => recordAll("interval"), CHECK_INTERVAL_MS);
+  const interval = setInterval(() => recordAll("interval"), checkIntervalMs);
   void recordAll("start");
-  log.info(`Page journal on: recording every page to ${path.relative(PROJECT_ROOT, JOURNAL_FILE)}`);
+  log.info(`Page journal (${fullMode ? "full 5s" : "on-demand lightweight"}) → ${path.relative(PROJECT_ROOT, JOURNAL_FILE)}`);
   return () => {
     clearInterval(interval);
     for (const timer of timers.values()) clearTimeout(timer);
