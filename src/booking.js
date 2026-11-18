@@ -1,8 +1,10 @@
-import { open, readdir, stat } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPortalIssues, getPortalStep } from "./assistant.js";
 import { log } from "./logger.js";
+import { OTP_REJECTED_PATTERN, OTP_SENT_PATTERN, detectServerTrouble, gotoWithRecovery, waitOutServerTrouble } from "./resilience.js";
+import { safeAccountName } from "./accounts.js";
 
 const FILE_INPUT_SELECTOR = 'input[type="file"]';
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -385,7 +387,8 @@ async function waitForPortalNoticesClosed(page, timeout = 30_000) {
 
 async function waitForPortalStep(page, label, candidates, timeout = 60_000) {
   let lastHeartbeat = 0;
-  const deadline = Date.now() + timeout;
+  let lastTroubleCheck = Date.now();
+  let deadline = Date.now() + timeout;
   while (!page.isClosed() && Date.now() < deadline) {
     if (!await waitForPortalNoticesClosed(page, 2_000)) {
       return false;
@@ -396,6 +399,19 @@ async function waitForPortalStep(page, label, candidates, timeout = 60_000) {
     }
 
     const now = Date.now();
+    // Under heavy load the portal may show an error or blank page instead of
+    // the next step. Recover it, then give the step its full time again.
+    if (now - lastTroubleCheck >= 8_000) {
+      lastTroubleCheck = now;
+      const trouble = await detectServerTrouble(page);
+      if (trouble && trouble.scope === "page") {
+        if (!await waitOutServerTrouble(page, { reason: `waiting for ${label}` })) {
+          return false;
+        }
+        deadline = Date.now() + timeout;
+        continue;
+      }
+    }
     if (now - lastHeartbeat >= 30_000) {
       await reportVisibleIssues(page);
       console.log(`Still waiting for the portal to show: ${label}.`);
@@ -483,7 +499,25 @@ async function waitForBookingStart(page) {
     { locator: page.getByRole("button", { name: /book your appointment|book appointment/i }) },
     { locator: page.getByRole("link", { name: /book your appointment|book appointment/i }) },
     { locator: page.locator(FILE_INPUT_SELECTOR).first(), state: "attached" },
+    // Seen live: with Webfiles and Mission already saved, Take Your
+    // Appointment opens a later step directly (here /appointment/time-slot).
+    { locator: page.locator('button, [role="button"]').filter({ hasText: CONTINUE_BOOKING_PATTERN }) },
+    { locator: page.locator('button, [role="button"]').filter({ hasText: MISSION_CONFIRM_PATTERN }) },
+    { locator: page.getByText(/waiting for booking portal/i) },
+    { locator: page.getByRole("button", { name: /pay now/i }) },
   ]);
+}
+
+// When the portal jumps straight to a later booking step (Mission, waiting
+// room, date picker, declaration, payment), continue from that step.
+async function continueIfLaterStep(page, prompts) {
+  const current = await detectPortalPage(page);
+  if (!RESUMABLE_PAGES.has(current.key)) {
+    return false;
+  }
+  log.step("Current Page", `${current.label}: the portal resumed the saved booking here`);
+  await continueBookingFrom(page, prompts, current.key);
+  return true;
 }
 
 async function isWebfileStepReady(page) {
@@ -510,6 +544,7 @@ async function isActiveBookingStepReady(page) {
     { locator: page.getByRole("button", { name: /save\s*&\s*continue|save\s+and\s+continue/i }) },
     { locator: page.getByRole("heading", { name: /please confirm your details/i }) },
     { locator: page.getByLabel(/select ivac cent(?:re|er)/i) },
+    { locator: page.locator('button, [role="button"]').filter({ hasText: MISSION_CONFIRM_PATTERN }) },
     { locator: page.locator('input[type="date"]'), state: "visible" },
     { locator: page.getByRole("button", { name: /pay now/i }) },
     { locator: page.getByRole("heading", { name: /payment details|payment gateway/i }) },
@@ -1023,6 +1058,10 @@ async function waitForDateStep(page) {
     if (/(?:waiting for booking portal|no slots available at the moment)/i.test(pageText)) {
       return true;
     }
+    const current = await detectPortalPage(page);
+    if (["time-slot", "waiting", "declaration", "payment"].includes(current.key)) {
+      return true;
+    }
     if (await waitForAnyEnabled(page, [
       page.locator('input[type="date"]'),
       page.getByLabel(/appointment date/i),
@@ -1090,7 +1129,292 @@ async function clickSlotContinueIfPresent(page) {
   }
 }
 
+const MISSION_CONFIRM_PATTERN = /confirm\s+mission\s*(?:&|and)\s*ivac\s+cent(?:re|er)/i;
+const MISSION_PICKER_LABEL = /^select (?:a |your )?mission$/i;
+const CENTRE_PICKER_LABEL = /^select (?:a |your )?ivac cent(?:re|er)$/i;
+
+// The live /appointment/mission page uses custom dropdown buttons, not <select>.
+// Each button holds a caption span ("Select your IVAC center") followed by the
+// chosen value span ("IVAC, Dhaka (JFP)"). Returns that value, or null.
+async function readPickerValue(page, captionPattern) {
+  return page.locator('button[type="button"]').evaluateAll((buttons, source) => {
+    const caption = new RegExp(source, "i");
+    for (const button of buttons) {
+      const texts = Array.from(button.querySelectorAll("span"))
+        .map((span) => (span.innerText || span.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const index = texts.findIndex((text) => caption.test(text));
+      if (index !== -1) {
+        return texts[index + 1] || "";
+      }
+    }
+    return null;
+  }, captionPattern.source).catch(() => null);
+}
+
+async function findVisibleEnabled(locator) {
+  const count = await locator.count().catch(() => 0);
+  const matches = [];
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    if (await candidate.isVisible().catch(() => false) && await candidate.isEnabled().catch(() => false)) {
+      matches.push(candidate);
+    }
+  }
+  return matches;
+}
+
+// Remembered Mission / IVAC Center choices, so the user is asked only once.
+// One file per account when several accounts run side by side.
+const PREFERENCES_USER = (process.env.IVAC_USER || "").trim() ? safeAccountName(process.env.IVAC_USER) : "";
+const PREFERENCES_PATH = path.join(PROJECT_ROOT, PREFERENCES_USER ? `booking-preferences.${PREFERENCES_USER}.json` : "booking-preferences.json");
+
+export async function loadBookingPreferences() {
+  try {
+    const value = JSON.parse(await readFile(PREFERENCES_PATH, "utf8"));
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveBookingPreferences(preferences) {
+  const clean = Object.fromEntries(Object.entries(preferences).filter(([, value]) => typeof value === "string" && value));
+  await writeFile(PREFERENCES_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8").catch(() => {});
+}
+
+// When no option could be read, keep the page HTML (scripts removed, field
+// values and long digit runs blanked) so the dropdown structure can be studied.
+async function saveDropdownSnapshot(page, kind) {
+  const html = await page.evaluate(() => {
+    const clone = document.body.cloneNode(true);
+    clone.querySelectorAll("script, style, svg, template, [class*='marquee']").forEach((node) => node.remove());
+    clone.querySelectorAll("input, textarea").forEach((node) => node.setAttribute("value", ""));
+    return clone.outerHTML.replace(/\d{6,}/g, (digits) => `[${digits.length} digits]`);
+  }).catch(() => "");
+  if (!html) return;
+  const dir = path.join(PROJECT_ROOT, "logs", "pages");
+  await mkdir(dir, { recursive: true }).catch(() => {});
+  const file = path.join(dir, `dropdown-${kind.replace(/\W+/g, "-").toLowerCase()}-${Date.now()}.html`);
+  await writeFile(file, html, "utf8").catch(() => {});
+  log.info(`Saved the ${kind} dropdown HTML to ${path.relative(PROJECT_ROOT, file)} for review.`);
+}
+
+// Opens one of the portal's custom dropdown buttons and picks an option. The
+// option list only exists after the click, so the options are found as the
+// clickable items that appeared because of the click. Picks the remembered
+// choice, the only option, or asks the user to choose from a numbered list.
+export async function chooseFromCustomDropdown(page, prompts, { caption, kind, preferred = "" }) {
+  const trigger = page.locator('button[type="button"]').filter({
+    has: page.locator("span", { hasText: caption }),
+  }).first();
+  if (await trigger.count().catch(() => 0) === 0) {
+    log.warn(`Could not find the ${kind} dropdown.`);
+    return null;
+  }
+  const enableDeadline = Date.now() + 15_000;
+  while (!await trigger.isEnabled().catch(() => false) && Date.now() < enableDeadline) {
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  if (!await trigger.isEnabled().catch(() => false)) {
+    log.warn(`The ${kind} dropdown did not become available.`);
+    return null;
+  }
+
+  // Remember what was on screen before the click: the option list is either
+  // created by the click or was already there but hidden.
+  await page.evaluate(() => {
+    const isVisible = (node) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0";
+    };
+    document.querySelectorAll("[data-ivac-opt]").forEach((node) => node.removeAttribute("data-ivac-opt"));
+    document.querySelectorAll("body *").forEach((node) => node.setAttribute("data-ivac-seen", isVisible(node) ? "v" : "h"));
+  });
+  await clickPortalControl(page, trigger, { timeout: 5_000 });
+
+  let options = [];
+  const listDeadline = Date.now() + 8_000;
+  while (options.length === 0 && Date.now() < listDeadline) {
+    await page.waitForTimeout(300).catch(() => {});
+    options = await page.evaluate(() => {
+      const isVisible = (node) => {
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0";
+      };
+      // New, or previously hidden, elements that are visible now. Seen live:
+      // the list is <div class="absolute z-50 ..."> next to the picker button,
+      // and each option is itself a <button type="button"> ("IVAC, KHULNA").
+      // The picker buttons were already visible before the click, so they are
+      // excluded by data-ivac-seen; only the header and banner are skipped here.
+      const fresh = Array.from(document.querySelectorAll("body *")).filter((node) =>
+        node.getAttribute("data-ivac-seen") !== "v" && isVisible(node) &&
+        !node.closest('[class*="marquee"], header'));
+      const textOf = (node) => (node.innerText || "").replace(/\s+/g, " ").trim();
+      const picks = [];
+      const seenText = new Set();
+      for (const node of fresh) {
+        const text = textOf(node);
+        if (!text || text.length > 80 || /^(?:select|choose|search|loading|no (?:data|options?|results?))\b/i.test(text)) continue;
+        // Keep the innermost element for each option text.
+        const innerSame = Array.from(node.querySelectorAll("*")).some((child) => textOf(child) === text);
+        if (innerSame || seenText.has(text)) continue;
+        // Skip containers that hold several options.
+        if (Array.from(node.children).filter((child) => textOf(child)).length > 1) continue;
+        if (node.disabled || node.getAttribute("aria-disabled") === "true") continue;
+        seenText.add(text);
+        node.setAttribute("data-ivac-opt", String(picks.length));
+        picks.push(text);
+      }
+      return picks;
+    }).catch(() => []);
+  }
+  await page.evaluate(() => document.querySelectorAll("[data-ivac-seen]").forEach((node) => node.removeAttribute("data-ivac-seen"))).catch(() => {});
+
+  if (options.length === 0) {
+    await saveDropdownSnapshot(page, kind);
+    log.warn(`The ${kind} list did not open or has no options. Choose it in the browser.`);
+    return null;
+  }
+  log.info(`${kind} options: ${options.join(" | ")}`);
+
+  let index = -1;
+  if (preferred) {
+    index = options.findIndex((option) => option.toLowerCase() === preferred.toLowerCase());
+    if (index === -1) index = options.findIndex((option) => option.toLowerCase().includes(preferred.toLowerCase()));
+  }
+  if (index === -1 && options.length === 1) {
+    index = 0;
+  }
+  if (index === -1) {
+    if (!prompts || typeof prompts.question !== "function") {
+      log.warn(`More than one ${kind} is available; choose it in the browser.`);
+      return null;
+    }
+    console.log(`Choose the ${kind}:`);
+    options.forEach((option, optionIndex) => console.log(`  ${optionIndex + 1}. ${option}`));
+    const answer = Number((await prompts.question(`${kind} number: `)).trim());
+    if (!Number.isInteger(answer) || answer < 1 || answer > options.length) {
+      log.warn(`No valid ${kind} was chosen.`);
+      return null;
+    }
+    index = answer - 1;
+  }
+
+  const option = page.locator(`[data-ivac-opt="${index}"]`).first();
+  if (!await clickPortalControl(page, option, { timeout: 5_000 })) {
+    log.warn(`Could not click the ${kind} option "${options[index]}".`);
+    return null;
+  }
+  await page.waitForTimeout(500).catch(() => {});
+  const chosen = await readPickerValue(page, caption);
+  if (!chosen || /^(?:select|choose|please select)\b/i.test(chosen)) {
+    log.warn(`The ${kind} "${options[index]}" did not stay selected.`);
+    return null;
+  }
+  log.step(kind, `Selected: ${chosen}`);
+  return options[index];
+}
+
+// Handles the "Confirm Mission & IVAC Center" page. Returns undefined when the
+// page is not shown, the confirmed centre label on success, or null on failure.
+export async function confirmMissionAndCentre(page, timeout = 120_000, { prompts = null, preferences = null } = {}) {
+  const confirmLocator = page.locator('button, [role="button"]').filter({ hasText: MISSION_CONFIRM_PATTERN });
+  if (await confirmLocator.count().catch(() => 0) === 0) {
+    return undefined;
+  }
+
+  log.step("IVAC Centre", "Mission & IVAC Center page detected");
+  const isPlaceholder = (value) => !value || /^(?:select|choose|please select)\b/i.test(value);
+
+  // Seen live: after a resumed booking the Mission is empty ("Select mission")
+  // and the IVAC center says "Please select a mission first". Pick both.
+  const prefs = preferences || await loadBookingPreferences();
+  let prefsChanged = false;
+  if (isPlaceholder(await readPickerValue(page, MISSION_PICKER_LABEL))) {
+    const mission = await chooseFromCustomDropdown(page, prompts, {
+      caption: MISSION_PICKER_LABEL, kind: "Mission", preferred: prefs.mission,
+    });
+    if (!mission) {
+      return null;
+    }
+    prefsChanged = prefsChanged || prefs.mission !== mission;
+    prefs.mission = mission;
+    await page.waitForTimeout(800).catch(() => {});
+  }
+  if (isPlaceholder(await readPickerValue(page, CENTRE_PICKER_LABEL))) {
+    const centreChoice = await chooseFromCustomDropdown(page, prompts, {
+      caption: CENTRE_PICKER_LABEL, kind: "IVAC Center", preferred: prefs.centre,
+    });
+    if (centreChoice) {
+      prefsChanged = prefsChanged || prefs.centre !== centreChoice;
+      prefs.centre = centreChoice;
+    }
+  }
+  if (!preferences && prefsChanged) {
+    await saveBookingPreferences(prefs);
+    log.info("Saved the Mission / IVAC Center choice in booking-preferences.json for next time.");
+  }
+
+  let centre = null;
+  let promptedUser = false;
+  const deadline = Date.now() + timeout;
+  while (!page.isClosed() && Date.now() < deadline) {
+    if (!await waitForPortalNoticesClosed(page, 2_000)) {
+      return null;
+    }
+    centre = await readPickerValue(page, CENTRE_PICKER_LABEL);
+    if (!isPlaceholder(centre)) {
+      break;
+    }
+    if (!promptedUser) {
+      log.action("Select your IVAC center in the browser; the helper will confirm it automatically.");
+      promptedUser = true;
+    }
+    await page.waitForTimeout(500).catch(() => {});
+  }
+  if (isPlaceholder(centre)) {
+    log.warn("No IVAC center was selected on the Mission page. Guided booking stopped.");
+    return null;
+  }
+
+  const mission = await readPickerValue(page, MISSION_PICKER_LABEL);
+  if (mission) {
+    log.item("Mission", mission);
+  }
+  log.item("IVAC Centre", centre);
+
+  if (!await waitForEnabledPortalStep(page, "Confirm Mission & IVAC Center", [confirmLocator], 30_000)) {
+    log.warn("The Confirm Mission & IVAC Center button did not become available. Guided booking stopped.");
+    return null;
+  }
+  const buttons = await findVisibleEnabled(confirmLocator);
+  if (buttons.length !== 1) {
+    log.warn(`Expected one Confirm Mission & IVAC Center button, found ${buttons.length}. Confirm it in the browser.`);
+    return null;
+  }
+
+  log.step("IVAC Centre", "Clicking Confirm Mission & IVAC Center");
+  if (!await clickPortalControl(page, buttons[0], { timeout: 5_000 })) {
+    log.warn("Could not click Confirm Mission & IVAC Center. Guided booking stopped.");
+    return null;
+  }
+  if (!await waitForDateStep(page)) {
+    log.warn("Mission & IVAC Center was confirmed, but the appointment-date step did not appear. Guided booking stopped for review.");
+    return null;
+  }
+  log.success(`Mission & IVAC Center confirmed: ${centre}.`);
+  return centre;
+}
+
 async function chooseCentre(page, prompts) {
+  const missionResult = await confirmMissionAndCentre(page, 120_000, { prompts });
+  if (missionResult !== undefined) {
+    return missionResult;
+  }
+
   const selects = page.locator("select");
   const details = await selects.evaluateAll((elements) => elements.map((element, index) => {
     const labels = element.labels ? Array.from(element.labels, (label) => label.innerText.trim()).filter(Boolean) : [];
@@ -1152,10 +1476,11 @@ async function chooseCentre(page, prompts) {
   const centreCards = page.locator('button, [role="button"], label').filter({
     hasText: /\b(dhaka|chittagong|sylhet|rajshahi|khulna|barisal|mymensingh|rangpur|cumilla|noakhali|brahmanbaria|satkhira|jashore|bogura|thakurgaon)\b/i,
   });
-  if (await centreCards.count() > 0) {
-    const cardText = (await centreCards.first().innerText()).trim();
+  const usableCentreCards = await findVisibleEnabled(centreCards);
+  if (usableCentreCards.length === 1) {
+    const cardText = (await usableCentreCards[0].innerText()).trim();
     log.step("IVAC Centre", `Selected: ${cardText}`);
-    await clickPortalControl(page, centreCards.first(), { timeout: 3_000 });
+    await clickPortalControl(page, usableCentreCards[0], { timeout: 3_000 });
     const nextBtn = page.locator('button').filter({ hasText: /^(?:next step|continue|proceed|submit)$/i });
     if (await nextBtn.count() > 0 && await nextBtn.first().isEnabled().catch(() => false)) {
       await clickPortalControl(page, nextBtn.first(), { timeout: 5_000 });
@@ -1171,9 +1496,164 @@ async function chooseCentre(page, prompts) {
   return (await prompts.question("Enter the selected centre name for the final review: ")).trim() || "Centre selected in browser";
 }
 
+const CONTINUE_BOOKING_PATTERN = /continue\s+booking/i;
+const SLOTS_HELD_PATTERN = /slots? .{0,40}temporarily held|check back shortly/i;
+const TRY_LATER_PATTERN = /wait a little longer|before trying again/i;
+
+// The portal's toast notifications (top-right "Info" boxes). They disappear
+// after a few seconds, so they are read right after an action.
+export async function readPortalNotifications(page) {
+  return page.locator('[data-sonner-toast], section[aria-label*="Notifications"] li, [role="region"][aria-label*="Notifications"] li, [role="status"], [role="alert"]')
+    .evaluateAll((nodes) => nodes
+      .map((node) => (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .map((text) => text.replace(/^Info\s*/i, "")))
+    .catch(() => []);
+}
+
+async function findEnabledCalendarDays(page) {
+  const dayButtons = page.locator('button[type="button"]').filter({ hasText: /^\s*\d{1,2}\s*$/ });
+  return findVisibleEnabled(dayButtons);
+}
+
+async function readCalendarMonth(page) {
+  return page.locator("span, h2, h3, div").filter({ hasText: /^\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}\s*$/i })
+    .first().innerText({ timeout: 1_000 }).then((text) => text.trim()).catch(() => "");
+}
+
+// Handles the live /appointment/time-slot calendar: picks a random enabled
+// day, waits for Turnstile and clicks Continue Booking. Returns undefined when
+// that page is not shown, the chosen date label on success, or null on failure.
+export async function selectCalendarDateAndContinue(page, { random = Math.random, timeout = 60_000, retryFor = 20 * 60_000, retryEvery = 30_000 } = {}) {
+  const continueLocator = page.locator('button, [role="button"]').filter({ hasText: CONTINUE_BOOKING_PATTERN });
+  if (await continueLocator.count().catch(() => 0) === 0) {
+    return undefined;
+  }
+  log.step("Appointment Date", "Calendar page detected");
+  // Start the Cloudflare check early: it only runs once the widget is on screen.
+  if (await scrollCaptchaIntoView(page)) {
+    await page.waitForTimeout(800).catch(() => {});
+  }
+
+  let days = await findEnabledCalendarDays(page);
+  for (let monthsAhead = 0; days.length === 0 && monthsAhead < 2; monthsAhead += 1) {
+    const nextMonth = page.getByRole("button", { name: /next month/i });
+    if (!await nextMonth.isEnabled().catch(() => false)) {
+      break;
+    }
+    await clickPortalControl(page, nextMonth, { timeout: 3_000 });
+    await page.waitForTimeout(400).catch(() => {});
+    days = await findEnabledCalendarDays(page);
+  }
+  if (days.length === 0) {
+    log.warn("No available appointment date is enabled in the calendar. Guided booking stopped.");
+    return null;
+  }
+
+  const month = await readCalendarMonth(page);
+  const dayTexts = await Promise.all(days.map((day) => day.innerText().then((text) => text.trim()).catch(() => "?")));
+  log.info(`Available dates${month ? ` in ${month}` : ""}: ${dayTexts.join(", ")}`);
+  const pick = Math.min(days.length - 1, Math.floor(random() * days.length));
+  const label = `${dayTexts[pick]}${month ? ` ${month}` : ""}`;
+
+  if (!await clickPortalControl(page, days[pick], { timeout: 3_000 })) {
+    log.warn(`Could not click appointment date ${label}. Guided booking stopped.`);
+    return null;
+  }
+  log.step("Appointment Date", `Selected (random): ${label}`);
+
+  if (!await waitForCaptchaIfNeeded(page)) {
+    return null;
+  }
+  if (!await waitForEnabledPortalStep(page, "Continue Booking", [continueLocator], timeout)) {
+    log.warn("Continue Booking did not become enabled after the date was selected. Check the calendar in the browser.");
+    return null;
+  }
+  // Seen live: before the slot booking period opens (the booking guide said
+  // "Slot booking period will start from 05:00 PM") Continue Booking sends
+  // nothing, shows no message, and only restarts the Cloudflare check. So the
+  // click is retried, each time after Cloudflare has passed again.
+  const retryDeadline = Date.now() + retryFor;
+  let waitBetweenTries = retryEvery;
+  const MAX_RETRY_WAIT_MS = Math.max(retryEvery, 120_000);
+  for (let attempt = 1; !page.isClosed() && Date.now() < retryDeadline; attempt += 1) {
+    if (attempt > 1) {
+      if (!await waitForCaptchaIfNeeded(page)) {
+        return null;
+      }
+      if (!await waitForEnabledPortalStep(page, "Continue Booking", [continueLocator], timeout)) {
+        log.warn("Continue Booking did not become enabled again. Check the calendar in the browser.");
+        return null;
+      }
+    }
+    const buttons = await findVisibleEnabled(continueLocator);
+    if (buttons.length !== 1) {
+      log.warn(`Expected one Continue Booking button, found ${buttons.length}. Continue in the browser.`);
+      return null;
+    }
+    log.step("Appointment Date", attempt === 1 ? "Clicking Continue Booking" : `Clicking Continue Booking (try ${attempt})`);
+    if (!await clickPortalControl(page, buttons[0], { timeout: 5_000 })) {
+      log.warn("Could not click Continue Booking. Guided booking stopped.");
+      return null;
+    }
+
+    // Seen live: right after the click the button briefly changes while the
+    // request runs, and then the page can stay on the date picker with "All
+    // slots for this date are temporarily held...". So "moved on" means the
+    // page itself is no longer the date picker, checked twice in a row.
+    const stepDeadline = Date.now() + Math.min(timeout, 15_000);
+    let leftCalendarChecks = 0;
+    while (!page.isClosed() && Date.now() < stepDeadline) {
+      await page.waitForTimeout(500).catch(() => {});
+      const notices = await readPortalNotifications(page);
+      if (notices.some((text) => SLOTS_HELD_PATTERN.test(text) || TRY_LATER_PATTERN.test(text))) {
+        break;
+      }
+      const current = await detectPortalPage(page);
+      if (current.key !== "time-slot") {
+        leftCalendarChecks += 1;
+        if (leftCalendarChecks >= 2) {
+          log.success(`Booking continued with ${label}: ${current.label} is open.`);
+          return label;
+        }
+        continue;
+      }
+      leftCalendarChecks = 0;
+      const report = await reportVisibleIssues(page);
+      if (report.issues.some(({ key }) => !["portal-alert", "slot-unavailable"].includes(key))) {
+        log.warn("The portal reported a problem after Continue Booking. Check the browser.");
+        return null;
+      }
+    }
+    // Seen live (18 Nov 2026), in the portal's top-right "Info" notifications:
+    //   "All slots for this date are temporarily held by users completing
+    //    payment. Please check back shortly."
+    //   "Please wait a little longer before trying again."  (clicked too often)
+    const notices = await readPortalNotifications(page);
+    const slotsHeld = notices.find((text) => SLOTS_HELD_PATTERN.test(text));
+    const tooSoon = notices.find((text) => TRY_LATER_PATTERN.test(text));
+    if (tooSoon) {
+      waitBetweenTries = Math.min(waitBetweenTries * 2, MAX_RETRY_WAIT_MS);
+      log.warn(`Portal: "${tooSoon}" Waiting ${Math.round(waitBetweenTries / 1000)} seconds before the next try.`);
+    } else if (slotsHeld) {
+      log.warn(`Portal: "${slotsHeld}" Trying again in ${Math.round(waitBetweenTries / 1000)} seconds.`);
+    } else if (attempt === 1) {
+      log.warn(`Continue Booking did not move on. The slot booking period may not be open yet (the portal's guide said 05:00 PM). Trying again every ${Math.round(waitBetweenTries / 1000)} seconds; press Ctrl+C to stop.`);
+    }
+    await page.waitForTimeout(waitBetweenTries).catch(() => {});
+  }
+  log.warn("Continue Booking never moved on to the next page. Guided booking stopped for review.");
+  return null;
+}
+
 async function chooseDate(page, prompts) {
   // Check if portal is in the waiting room
   if (!await handleWaitingRoomIfNeeded(page)) return null;
+
+  const calendarResult = await selectCalendarDateAndContinue(page);
+  if (calendarResult !== undefined) {
+    return calendarResult;
+  }
 
   const waitForSubmitStep = () => waitForPortalStep(page, "consent or appointment-submit step", [
     { locator: page.locator('input[type="checkbox"]'), state: "visible" },
@@ -1293,18 +1773,38 @@ async function completeConsentIfNeeded(page, prompts) {
   return true;
 }
 
+// Cloudflare Turnstile on the portal only starts its check once the widget is
+// on screen, and on the date picker it sits below the calendar. Scroll it into
+// the middle of the viewport.
+export async function scrollCaptchaIntoView(page) {
+  return page.evaluate(() => {
+    const response = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"], textarea[name="g-recaptcha-response"]');
+    const widget = document.querySelector("#cf-turnstile, .cf-turnstile, [data-sitekey], .g-recaptcha, iframe[src*='turnstile'], iframe[src*='captcha']") ||
+      response?.closest("div");
+    if (!widget) return false;
+    widget.scrollIntoView({ block: "center", inline: "nearest" });
+    return true;
+  }).catch(() => false);
+}
+
 async function waitForCaptchaIfNeeded(page) {
   const captcha = page.locator(
-    'iframe[title*="captcha" i], iframe[src*="captcha" i], iframe[src*="turnstile" i], .g-recaptcha, .cf-turnstile, [data-sitekey], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]',
+    'iframe[title*="captcha" i], iframe[src*="captcha" i], iframe[src*="turnstile" i], .g-recaptcha, .cf-turnstile, #cf-turnstile, [data-sitekey], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]',
   );
   if (await captcha.count() === 0) {
     return true;
   }
-  log.action("Complete the Cloudflare / CAPTCHA directly in the browser...");
+  await scrollCaptchaIntoView(page);
+  log.action("Cloudflare check scrolled into view; waiting for it to pass (complete it in the browser if it asks)...");
   let lastHeartbeat = 0;
+  let lastScroll = Date.now();
   while (!page.isClosed()) {
     if (!await waitForPortalNoticesClosed(page)) {
       return false;
+    }
+    if (Date.now() - lastScroll >= 5_000) {
+      await scrollCaptchaIntoView(page);
+      lastScroll = Date.now();
     }
     const solved = await page.locator('textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')
       .evaluateAll((elements) => elements.some((element) => Boolean(element.value?.trim())))
@@ -1323,6 +1823,14 @@ async function waitForCaptchaIfNeeded(page) {
   return false;
 }
 
+const lastSuccessNoticesByPage = new WeakMap();
+
+export function isSuccessNotice(text) {
+  const value = String(text || "");
+  return /\b(?:success(?:ful(?:ly)?)?|has been sent|sent to your|uploaded|saved|verified|confirmed)\b/i.test(value) &&
+    !/\b(?:fail(?:ed|ure)?|error|invalid|incorrect|expired|denied|not (?:found|allowed|valid|available)|unable|too many)\b/i.test(value);
+}
+
 async function reportVisibleIssues(page) {
   let issues = [];
   const alertLocator = page.locator('[role="alert"], .alert, .text-red-500, [aria-live="assertive"], .toast');
@@ -1334,7 +1842,18 @@ async function reportVisibleIssues(page) {
       if (await el.isVisible().catch(() => false)) {
         const text = (await el.innerText().catch(() => "")).trim();
         if (text && !/^(?:\*|close|x)$/i.test(text)) {
-          visibleAlerts.push(text);
+          if (isSuccessNotice(text)) {
+            // Seen live: "OTP sent successfully! A verification code has been
+            // sent..." is a confirmation, not a problem; never stop the flow on it.
+            const seen = lastSuccessNoticesByPage.get(page) || new Set();
+            if (!seen.has(text)) {
+              log.info(`Portal message: ${text.replace(/\s+/g, " ")}`);
+              seen.add(text);
+              lastSuccessNoticesByPage.set(page, seen);
+            }
+          } else {
+            visibleAlerts.push(text);
+          }
         }
       }
     }
@@ -1365,7 +1884,13 @@ function getApplicantCount(pageText) {
   return match ? Number(match[1]) : null;
 }
 
-async function waitForApplicantCount(page, expectedCount, timeout = 45_000) {
+// Seen live: re-uploading a Webfile the portal already holds from an earlier
+// attempt is refused with HTTP 409 and the toast "File already exists.. Try
+// again", while the page still shows "Total number of applicants: 0".
+export const FILE_ALREADY_UPLOADED = "file-already-uploaded";
+const FILE_ALREADY_EXISTS_PATTERN = /file already exists/i;
+
+async function waitForApplicantCount(page, expectedCount, timeout = 60_000) {
   let lastHeartbeat = 0;
   const deadline = Date.now() + timeout;
   while (!page.isClosed() && Date.now() < deadline) {
@@ -1382,8 +1907,11 @@ async function waitForApplicantCount(page, expectedCount, timeout = 45_000) {
         count = Number(numMatch[0]);
       }
     }
+    const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    if (FILE_ALREADY_EXISTS_PATTERN.test(pageText)) {
+      return FILE_ALREADY_UPLOADED;
+    }
     if (count === null) {
-      const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
       count = getApplicantCount(pageText);
     }
     if (count !== null && count >= expectedCount) {
@@ -1508,7 +2036,64 @@ async function findConfirmModalSaveButton(page) {
   return null;
 }
 
+let lastUploadIssueKeys = [];
+
+// Reloads the upload page and reads "Total number of applicants" as the
+// server reports it. Returns the count, or null when it cannot be read.
+async function recheckApplicantCountAfterReload(page, applicantLabel) {
+  log.warn(`${applicantLabel}: the page did not show the upload. Reloading to check what the portal actually has.`);
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await waitOutServerTrouble(page, { reason: "checking the uploaded Webfiles" });
+  await dismissPortalNotices(page).catch(() => {});
+  const deadline = Date.now() + 20_000;
+  while (!page.isClosed() && Date.now() < deadline) {
+    const text = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    const count = getApplicantCount(text);
+    if (count !== null) {
+      log.info(`After the reload the portal shows ${count} applicant(s).`);
+      return count;
+    }
+    await page.waitForTimeout(500).catch(() => {});
+  }
+  return null;
+}
+
+// Reads the Primary Applicant the portal already holds, e.g. "SUMALA MONDAL"
+// (seen live: "Primary Applicant\nSUMALA MONDAL\nUpload Other Applicant's Webfile").
+export function readUploadedPrimaryName(pageText) {
+  const match = String(pageText || "").match(/Primary Applicant[ \t]*\r?\n[ \t]*([^\r\n]{2,60})/);
+  const name = match ? match[1].trim() : "";
+  return name && !/upload|webfile|maximum|confirm/i.test(name) ? name : "";
+}
+
+// True unless the file name carries a person's name that differs from the
+// portal's Primary (e.g. "01 BGDDW70BEF26PA690503 PARIMAL.pdf" vs "SUMALA MONDAL").
+export function fileMatchesPerson(filePath, personName) {
+  const words = path.basename(filePath, path.extname(filePath)).split(/[^A-Za-z]+/)
+    .filter((word) => word.length >= 3 && !/\d/.test(word) && !/^bgd/i.test(word));
+  if (words.length === 0) return true;
+  const person = personName.toLowerCase();
+  return words.some((word) => person.includes(word.toLowerCase()));
+}
+
+// Decides which PDFs still need uploading. Normally 01 is the Primary. When the
+// portal already shows a different Primary, every PDF becomes another applicant.
+export function planApplicantUploads(applicants, pageText) {
+  const primaryName = readUploadedPrimaryName(pageText);
+  if (!primaryName || applicants.length === 0 || fileMatchesPerson(applicants[0].path, primaryName)) {
+    return { applicants, primaryOnPortal: "" };
+  }
+  return {
+    primaryOnPortal: primaryName,
+    applicants: [
+      { path: null, size: 0, label: `Primary Applicant (${primaryName}, already on the portal)`, existing: true },
+      ...applicants.map((applicant, index) => ({ ...applicant, label: `Other Applicant ${index + 2}` })),
+    ],
+  };
+}
+
 async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmApplicants = false } = {}) {
+  lastUploadIssueKeys = [];
   const usedInputs = new Set();
   const currentPageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
   const alreadyUploaded = getApplicantCount(currentPageText) ?? 0;
@@ -1523,6 +2108,10 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
   for (let index = alreadyUploaded; index < applicants.length; index += 1) {
     const applicant = applicants[index];
     const applicantNumber = index + 1;
+    if (applicant.existing) {
+      log.warn(`${applicant.label} is no longer shown on the portal. Check the upload page in the browser.`);
+      return false;
+    }
     log.step("Webfile Upload", `Preparing applicant ${applicantNumber} of ${applicants.length} (${applicant.label}): ${path.basename(applicant.path)}`);
 
     // Ensure slot is 100% ready (Turnstile verified, dropzone enabled, not loading) before attaching
@@ -1564,24 +2153,48 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
     }
 
     let report = await reportVisibleIssues(page);
+    if (FILE_ALREADY_EXISTS_PATTERN.test(report.pageText)) {
+      // The server may already have this very file (an earlier attempt that
+      // the page never showed). Ask the server before giving up on it.
+      const serverCount = await recheckApplicantCountAfterReload(page, applicant.label);
+      if (serverCount !== null && serverCount >= applicantNumber) {
+        log.success(`Applicant ${applicantNumber} (${applicant.label}) is already on the portal. Count: ${serverCount}.`);
+        continue;
+      }
+      return FILE_ALREADY_UPLOADED;
+    }
     if (report.issues.length > 0) {
+      lastUploadIssueKeys = report.issues.map(({ key }) => key);
       log.warn(`Resolve the portal message for ${applicant.label} before continuing.`);
       return false;
     }
 
-    const acceptedCount = await waitForApplicantCount(page, applicantNumber);
+    let acceptedCount = await waitForApplicantCount(page, applicantNumber);
+    if (acceptedCount === FILE_ALREADY_UPLOADED) {
+      const serverCount = await recheckApplicantCountAfterReload(page, applicant.label);
+      if (serverCount !== null && serverCount >= applicantNumber) {
+        log.success(`Applicant ${applicantNumber} (${applicant.label}) is already on the portal. Count: ${serverCount}.`);
+        continue;
+      }
+      return FILE_ALREADY_UPLOADED;
+    }
     report = await reportVisibleIssues(page);
     if (report.issues.length > 0) {
+      lastUploadIssueKeys = report.issues.map(({ key }) => key);
       log.warn(`Resolve the portal message for ${applicant.label} before continuing.`);
       return false;
     }
-    if (acceptedCount === null) {
-      log.warn(`The browser closed or timed out before the portal confirmed ${applicant.label}.`);
-      return false;
-    }
-    if (acceptedCount < applicantNumber) {
-      log.warn(`The portal shows ${acceptedCount} applicant(s), which does not match applicant ${applicantNumber}.`);
-      return false;
+    // Seen in practice: the PDF was uploaded but the page never showed it.
+    // Reload and read the server's count before deciding it failed, so the
+    // same file is never uploaded twice.
+    if (acceptedCount === null || acceptedCount < applicantNumber) {
+      const serverCount = await recheckApplicantCountAfterReload(page, applicant.label);
+      if (serverCount !== null && serverCount >= applicantNumber) {
+        acceptedCount = serverCount;
+      } else {
+        log.warn(`The portal shows ${serverCount ?? acceptedCount ?? "no"} applicant(s) after a reload, so ${applicant.label}'s upload did not reach the server.`);
+        return false;
+      }
     }
     log.success(`Applicant ${applicantNumber} (${applicant.label}) confirmed. Count: ${acceptedCount}.`);
   }
@@ -1678,8 +2291,11 @@ async function uploadApplicantPdfs(page, prompts, applicants, { autoConfirmAppli
   }
 
   const bookingStepReady = await waitForPortalStep(page, "IVAC Centre/date selection", [
-    { locator: page.getByText(/select ivac cent(?:re|er)/i) },
-    { locator: page.getByText(/select mission/i) },
+    { locator: page.getByText(/select (?:your )?ivac cent(?:re|er)/i) },
+    { locator: page.locator('button, [role="button"]').filter({ hasText: MISSION_CONFIRM_PATTERN }) },
+    { locator: page.locator('button, [role="button"]').filter({ hasText: CONTINUE_BOOKING_PATTERN }) },
+    { locator: page.getByText(/select (?:an )?appointment date/i) },
+    { locator: page.getByText(/select (?:a |your )?mission/i) },
     { locator: page.locator("select"), state: "visible" },
     { locator: page.locator('input[type="date"]'), state: "visible" },
     { locator: page.getByText(/appointment calendar|select appointment date/i) },
@@ -1859,7 +2475,8 @@ async function fillAndSubmitLogin(page, credentials) {
       log.step("Sign In", "Entered contact number and password");
       let enabled = await submitButton.isEnabled().catch(() => false);
       let lastHeartbeat = 0;
-      const enableDeadline = Date.now() + 60_000;
+      // Cloudflare can take minutes to pass when the portal is busy.
+      const enableDeadline = Date.now() + 5 * 60_000;
       if (!enabled) {
         log.action("Credentials filled. Complete Cloudflare / CAPTCHA in browser to enable Sign In...");
         while (!page.isClosed() && Date.now() < enableDeadline) {
@@ -1931,7 +2548,12 @@ function isAuthenticationPage(pageText) {
 }
 
 async function isOtpPageVisible(page, pageText) {
-  return isOtpPage(pageText) || await page.locator('input[autocomplete="one-time-code"]').isVisible().catch(() => false);
+  if (isOtpPage(pageText)) return true;
+  // Seen live: /verify-login-phone-otp with six boxes #otp-0 ... #otp-5.
+  try {
+    if (/\/verify-[\w-]*otp/i.test(new URL(page.url()).pathname)) return true;
+  } catch {}
+  return await page.locator('#otp-0, input[autocomplete="one-time-code"]').first().isVisible().catch(() => false);
 }
 
 async function isAuthenticationPageVisible(page, pageText) {
@@ -1980,19 +2602,120 @@ export async function isAlreadyLoggedIn(page) {
   return false;
 }
 
-async function waitForOtpOrAuth(page, prompts, promptMessage, timeout = 120_000) {
+// The "press Enter when done" prompt is optional: the page usually finishes
+// sign-in on its own. readline drops any question asked while another is still
+// pending, so the unanswered prompt must be cancelled before returning, or every
+// later question (date, centre, final submit) would never resolve.
+async function waitForOtpOrAuth(page, prompts, promptMessage, timeout = 15 * 60_000) {
   let promptDone = false;
+  const promptAbort = new AbortController();
   if (prompts && typeof prompts.question === "function") {
-    prompts.question(promptMessage).then(() => {
-      promptDone = true;
-    }).catch(() => {
-      promptDone = true;
-    });
+    Promise.resolve()
+      .then(() => prompts.question(promptMessage, { signal: promptAbort.signal }))
+      .then(() => {
+        promptDone = true;
+      })
+      .catch(() => {
+        promptDone = true;
+      });
   }
 
-  const deadline = Date.now() + timeout;
+  try {
+    return await pollOtpOrAuth(page, promptMessage, () => promptDone, timeout);
+  } finally {
+    if (!promptDone) {
+      promptAbort.abort();
+      process.stdout.write("\n");
+    }
+  }
+}
+
+// Where an OTP can come from besides the browser itself (the control panel).
+// { take(): string | null, request(details): void }
+let otpProvider = null;
+export function setOtpProvider(provider) {
+  otpProvider = provider || null;
+}
+
+// Fills the portal's OTP and clicks Verify OTP. Seen live: the OTP page has
+// six one-digit boxes (#otp-0 ... #otp-5) and Verify OTP stays disabled until
+// all are filled. A single OTP field is handled as a fallback.
+export async function fillOtpAndVerify(page, code) {
+  const digits = String(code).replace(/\D/g, "");
+  if (!digits) return false;
+  const boxes = page.locator('input[id^="otp-"][maxlength="1"]');
+  const boxCount = await boxes.count().catch(() => 0);
+  if (boxCount >= digits.length) {
+    for (let index = 0; index < digits.length; index += 1) {
+      const box = page.locator(`#otp-${index}`);
+      await box.click({ timeout: 3_000 }).catch(() => {});
+      await box.fill("").catch(() => {});
+      await box.pressSequentially(digits[index], { delay: 40, timeout: 3_000 }).catch(() => {});
+    }
+  } else {
+    const single = page.locator('input[autocomplete="one-time-code"], input[name*="otp" i], input[id*="otp" i]').first();
+    if (!await single.isVisible().catch(() => false)) return false;
+    await single.click({ timeout: 3_000 }).catch(() => {});
+    await single.fill("").catch(() => {});
+    await single.pressSequentially(digits, { delay: 40, timeout: 5_000 }).catch(() => {});
+  }
+  const verify = page.locator('button, [role="button"]').filter({ hasText: /verify\s*otp/i }).first();
+  const enableDeadline = Date.now() + 10_000;
+  while (Date.now() < enableDeadline && !await verify.isEnabled().catch(() => false)) {
+    await page.waitForTimeout(200).catch(() => {});
+  }
+  if (!await verify.isEnabled().catch(() => false)) {
+    log.warn("Verify OTP did not become active after filling the OTP. Check the boxes in the browser.");
+    return false;
+  }
+  log.step("OTP", "Entered the OTP from the control panel; clicking Verify OTP");
+  return clickPortalControl(page, verify, { timeout: 5_000 });
+}
+
+async function pollOtpOrAuth(page, promptMessage, isPromptDone, timeout) {
+  const started = Date.now();
+  let deadline = Date.now() + timeout;
   let lastHeartbeat = 0;
+  let lastTroubleCheck = 0;
+  let otpRequested = false;
+  const reportedRejections = new Set();
   while (!page.isClosed() && Date.now() < deadline) {
+    // From the control panel: ask for the OTP once the OTP page is open, and
+    // fill it in as soon as it arrives.
+    if (otpProvider) {
+      const onOtpPage = await isOtpPageVisible(page, "");
+      if (onOtpPage && !otpRequested) {
+        otpRequested = true;
+        otpProvider.request({ path: (() => { try { return new URL(page.url()).pathname; } catch { return ""; } })() });
+        log.action("Waiting for the OTP: type it in the control panel (or directly in the browser).");
+      }
+      const code = onOtpPage ? otpProvider.take() : null;
+      if (code) {
+        await fillOtpAndVerify(page, code);
+        await page.waitForTimeout(1_500).catch(() => {});
+      }
+    }
+    // Seen in practice: the OTP SMS can take minutes when the portal is busy.
+    // Keep waiting (never resend automatically: a new code cancels the old
+    // one), tell the user if the portal rejects the code, and ride out
+    // overloaded-server pages.
+    const notices = await readPortalNotifications(page);
+    for (const text of notices) {
+      if (OTP_REJECTED_PATTERN.test(text) && !reportedRejections.has(text)) {
+        reportedRejections.add(text);
+        log.action(`The portal rejected the OTP: "${text}". Request a new code with Resend OTP in the browser, then enter the newest code.`);
+        otpProvider?.request({ rejected: text });
+      }
+    }
+    if (Date.now() - lastTroubleCheck >= 5_000) {
+      lastTroubleCheck = Date.now();
+      const trouble = await detectServerTrouble(page);
+      if (trouble && trouble.scope === "page") {
+        await waitOutServerTrouble(page, { reason: "waiting for the OTP" });
+        deadline = Math.max(deadline, Date.now() + 5 * 60_000);
+        continue;
+      }
+    }
     if (!await waitForPortalNoticesClosed(page, 2_000)) {
       return "closed";
     }
@@ -2007,7 +2730,7 @@ async function waitForOtpOrAuth(page, prompts, promptMessage, timeout = 120_000)
       return "authenticated";
     }
 
-    if (promptDone) {
+    if (isPromptDone()) {
       await page.waitForTimeout(200);
       const textAfter = await page.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
       if (await isOtpPageVisible(page, textAfter)) {
@@ -2021,7 +2744,10 @@ async function waitForOtpOrAuth(page, prompts, promptMessage, timeout = 120_000)
     const now = Date.now();
     if (now - lastHeartbeat >= 30_000) {
       await reportVisibleIssues(page);
-      console.log("Waiting for authentication/OTP verification to complete...");
+      const waited = Math.floor((now - started) / 1000);
+      const minutes = Math.floor(waited / 60);
+      const seconds = waited % 60;
+      console.log(`Waiting for the OTP to be entered and verified (${minutes}m ${seconds}s). If the SMS is late, keep waiting; use Resend OTP in the browser only if the portal offers it.`);
       lastHeartbeat = now;
     }
     await page.waitForTimeout(300).catch(() => {});
@@ -2029,10 +2755,25 @@ async function waitForOtpOrAuth(page, prompts, promptMessage, timeout = 120_000)
   return "closed";
 }
 
-async function waitForAuthenticationOutcome(page, afterOtp = false, timeout = 60_000) {
+// After Sign In Now: waits for the OTP page or the logged-in portal. Under
+// heavy load the portal can (seen in practice) answer slowly, send the OTP but
+// stay on /signin, or rate-limit. Clicking Sign In again sends a new OTP and
+// counts against the limit, so it is clicked again only after a long silence.
+const OTP_PAGE_PATH = "/verify-login-phone-otp";
+const SIGN_IN_SILENCE_BEFORE_RECLICK_MS = 90_000;
+const MAX_SIGN_IN_RECLICKS = 2;
+const OTP_SENT_BUT_STUCK_MS = 20_000;
+
+async function waitForAuthenticationOutcome(page, afterOtp = false, timeout = 10 * 60_000) {
   let lastHeartbeat = 0;
   let sawAlert = false;
-  const deadline = Date.now() + timeout;
+  const started = Date.now();
+  let deadline = Date.now() + timeout;
+  let lastActivity = Date.now();
+  let otpSentAt = 0;
+  let triedOtpPageDirectly = false;
+  let reclicks = 0;
+  let lastTroubleCheck = 0;
   while (!page.isClosed() && Date.now() < deadline) {
     if (!await waitForPortalNoticesClosed(page, 2_000)) {
       return "closed";
@@ -2045,16 +2786,60 @@ async function waitForAuthenticationOutcome(page, afterOtp = false, timeout = 60
     if (!await isAuthenticationPageVisible(page, pageText) && (await isBookingSurfaceReady(page) || await isAlreadyLoggedIn(page))) {
       return "authenticated";
     }
+
+    const now = Date.now();
+    const notices = await readPortalNotifications(page);
+    if (!afterOtp && !otpSentAt && notices.some((text) => OTP_SENT_PATTERN.test(text))) {
+      otpSentAt = now;
+      lastActivity = now;
+    }
+    // Seen in practice: "OTP sent" appears but the OTP input page never opens.
+    if (!afterOtp && otpSentAt && !triedOtpPageDirectly && now - otpSentAt >= OTP_SENT_BUT_STUCK_MS && !otpPageVisible) {
+      triedOtpPageDirectly = true;
+      log.warn("The portal sent the OTP but did not open the OTP page. Opening the OTP page directly.");
+      const origin = new URL(page.url()).origin;
+      await gotoWithRecovery(page, `${origin}${OTP_PAGE_PATH}`, { attempts: 3 });
+      await page.waitForTimeout(1_500).catch(() => {});
+      const textAfter = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+      if (await isOtpPageVisible(page, textAfter)) {
+        log.success("OTP page opened. Enter the OTP you received.");
+        return "otp";
+      }
+      log.warn("The OTP page did not open directly. Enter the OTP if an input appears, or click Sign In Now again in the browser.");
+    }
+
+    // An overloaded or rate-limited portal: wait it out instead of clicking.
+    if (now - lastTroubleCheck >= 5_000) {
+      lastTroubleCheck = now;
+      const trouble = await detectServerTrouble(page);
+      if (trouble) {
+        await waitOutServerTrouble(page, { reason: "signing in" });
+        lastActivity = Date.now();
+        deadline = Math.max(deadline, Date.now() + 2 * 60_000);
+        continue;
+      }
+    }
+
+    // Nothing happened for a long time after Sign In: click it once more.
+    if (!afterOtp && !otpSentAt && reclicks < MAX_SIGN_IN_RECLICKS && now - lastActivity >= SIGN_IN_SILENCE_BEFORE_RECLICK_MS) {
+      const signInButton = page.locator('button, [role="button"], input[type="submit"]').filter({ hasText: /sign\s*in\s*now/i }).first();
+      if (await signInButton.isVisible().catch(() => false) && await signInButton.isEnabled().catch(() => false)) {
+        reclicks += 1;
+        log.warn(`No answer from the portal ${Math.round((now - lastActivity) / 1000)}s after Sign In. Clicking Sign In Now again (${reclicks} of ${MAX_SIGN_IN_RECLICKS}).`);
+        await clickPortalControl(page, signInButton, { timeout: 5_000 });
+      }
+      lastActivity = Date.now();
+    }
     if (!sawAlert && await page.getByRole("alert").isVisible().catch(() => false)) {
       console.warn("The portal displayed an authentication alert. Resolve it in the browser; the helper is waiting for the next page state.");
       sawAlert = true;
     }
-    const now = Date.now();
     if (now - lastHeartbeat >= 30_000) {
       await reportVisibleIssues(page);
+      const waited = Math.round((now - started) / 1000);
       console.log(afterOtp
-        ? "Waiting for OTP verification to finish and the authenticated booking page to appear."
-        : "Waiting for the sign-in result: OTP verification or the authenticated booking page.");
+        ? `Waiting for OTP verification to finish and the authenticated booking page to appear (${waited}s).`
+        : `Waiting for the sign-in result: OTP verification or the authenticated booking page (${waited}s; the portal can be slow when busy).`);
       lastHeartbeat = now;
     }
     await page.waitForTimeout(300).catch(() => {});
@@ -2114,9 +2899,107 @@ async function waitForNextOrWebfile(page, label) {
   return { type: "closed" };
 }
 
+const PORTAL_PAGES = {
+  closed: "Browser closed",
+  confirmed: "Booking confirmation",
+  payment: "Payment",
+  declaration: "Declaration / consent",
+  "time-slot": "Appointment date picker",
+  waiting: "Waiting room",
+  mission: "Mission & IVAC Center selection",
+  webfile: "Webfile upload",
+  "booking-guide": "Appointment booking guide",
+  otp: "OTP verification",
+  login: "Sign in",
+  dashboard: "Dashboard (Take Your Appointment)",
+  unknown: "Unrecognized page",
+};
+
+// Visible page text without the scrolling notice banner, whose wording
+// ("OTP, login credentials", "payment method") would otherwise look like
+// other steps.
+async function readPageTextWithoutBanner(page) {
+  return page.evaluate(() => {
+    const clone = document.body ? document.body.cloneNode(true) : null;
+    if (!clone) return "";
+    clone.querySelectorAll('[class*="marquee"], script, style, template').forEach((node) => node.remove());
+    return (clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
+  }).catch(() => "");
+}
+
+// Identifies the portal page that is open right now, using the URL first and
+// then visible controls/text.
+export async function detectPortalPage(page) {
+  const result = (key) => ({ key, label: PORTAL_PAGES[key] });
+  if (page.isClosed()) {
+    return result("closed");
+  }
+  let pathname = "";
+  try {
+    pathname = new URL(page.url()).pathname.toLowerCase();
+  } catch {}
+  const visible = async (locator) => locator.first().isVisible().catch(() => false);
+  const attached = async (locator) => await locator.count().catch(() => 0) > 0;
+  const text = await readPageTextWithoutBanner(page);
+
+  if (/(?:appointment|booking) (?:is )?confirmed|successfully booked|download (?:the )?invoice/i.test(text)) {
+    return result("confirmed");
+  }
+  if (/\/(?:continue-payment|confirm-payment|payment)\b/.test(pathname) ||
+    await visible(page.getByRole("button", { name: /pay now/i })) ||
+    await visible(page.getByRole("heading", { name: /payment details|payment gateway/i }))) {
+    return result("payment");
+  }
+  if (/\/appointment\/declaration\b/.test(pathname)) {
+    return result("declaration");
+  }
+  if (/\/appointment\/time-slot\b/.test(pathname) ||
+    await attached(page.locator('button, [role="button"]').filter({ hasText: CONTINUE_BOOKING_PATTERN })) ||
+    /select an appointment date|pick up a date/i.test(text)) {
+    return result("time-slot");
+  }
+  if (/\/appointment\/waiting\b/.test(pathname) ||
+    /waiting for booking portal|no slots available at the moment/i.test(text)) {
+    return result("waiting");
+  }
+  if (/\/appointment\/mission\b/.test(pathname) ||
+    await attached(page.locator('button, [role="button"]').filter({ hasText: MISSION_CONFIRM_PATTERN }))) {
+    return result("mission");
+  }
+  if (await visible(page.locator('input[type="checkbox"]')) && /declaration|i consent|i agree/i.test(text)) {
+    return result("declaration");
+  }
+  if (await attached(page.locator(FILE_INPUT_SELECTOR)) || /upload primary applicant(?:'s|’s)? webfile/i.test(text)) {
+    return result("webfile");
+  }
+  if (/\/to-book-visa-appointment\b/.test(pathname) || /to book your visa appointment/i.test(text) ||
+    await visible(page.locator('a, button, [role="button"]').filter({ hasText: /^\s*next step\s*$/i }))) {
+    return result("booking-guide");
+  }
+  if (await isOtpPageVisible(page, text)) {
+    return result("otp");
+  }
+  for (const frame of page.frames()) {
+    if (await visible(frame.locator('input[type="password"]'))) {
+      return result("login");
+    }
+  }
+  if (await findTakeAppointmentControl(page)) {
+    return result("dashboard");
+  }
+  return result("unknown");
+}
+
 export async function runGuidedBookingFlow(page, prompts, credentials = null, flowOptions = {}) {
   await unblockInspectAndPaste(page);
   await dismissPortalNotices(page);
+
+  const startPage = await detectPortalPage(page);
+  log.step("Current Page", startPage.label);
+  if (RESUMABLE_PAGES.has(startPage.key)) {
+    log.info("The portal is already past the Webfile step; continuing the booking from this page.");
+    return continueBookingFrom(page, prompts, startPage.key);
+  }
 
   let current = await reportVisibleIssues(page);
   const alreadyAuthed = await isAlreadyLoggedIn(page);
@@ -2149,6 +3032,9 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null, fl
         if (!await clickPortalControl(page, takeAppointment, { timeout: 5_000 })) return;
         if (!await waitForBookingStart(page)) {
           log.warn("The browser closed before the sign-in or booking page appeared.");
+          return;
+        }
+        if (await continueIfLaterStep(page, prompts)) {
           return;
         }
       }
@@ -2232,6 +3118,9 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null, fl
       }
     }
   }
+  if (await continueIfLaterStep(page, prompts)) {
+    return;
+  }
 
   if (!await isWebfileStepReady(page)) {
     let navigation = await waitForBookingNavigation(page, "booking");
@@ -2282,20 +3171,116 @@ export async function runGuidedBookingFlow(page, prompts, credentials = null, fl
   if (!applicants) {
     return;
   }
-  if (!await uploadApplicantPdfs(page, prompts, applicants, flowOptions)) {
+  // Retry: a failed upload is tried again (the portal's own applicant count
+  // tells which files are already in), except when the portal says the
+  // Webfile does not match the account; the same file would fail again.
+  const MAX_UPLOAD_ATTEMPTS = 3;
+  let uploadResult = false;
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
+    const pageText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
+    const plan = planApplicantUploads(applicants, pageText);
+    if (plan.primaryOnPortal) {
+      log.info(`The portal already has Primary Applicant ${plan.primaryOnPortal}; ${path.basename(applicants[0].path)} is a different person, so all ${applicants.length} PDF(s) will be uploaded as other applicants.`);
+      if (plan.applicants.length > 4) {
+        log.warn(`That would make ${plan.applicants.length} applicants; the portal allows at most 4. Keep only this booking's PDFs in doc_file.`);
+        return;
+      }
+    }
+    uploadResult = await uploadApplicantPdfs(page, prompts, plan.applicants, flowOptions);
+    if (uploadResult === FILE_ALREADY_UPLOADED || uploadResult) {
+      break;
+    }
+    if (lastUploadIssueKeys.includes("details-mismatch")) {
+      log.warn("The portal says this Webfile does not match the account's details. Upload the account holder's Webfile as Primary (or fix doc_file), then press b.");
+      break;
+    }
+    if (attempt < MAX_UPLOAD_ATTEMPTS && (await detectPortalPage(page)).key === "webfile") {
+      log.warn(`Upload attempt ${attempt} did not finish; trying again (${attempt + 1} of ${MAX_UPLOAD_ATTEMPTS}).`);
+      await dismissPortalNotices(page).catch(() => {});
+      await page.waitForTimeout(3_000).catch(() => {});
+    } else {
+      break;
+    }
+  }
+  if (uploadResult === FILE_ALREADY_UPLOADED) {
+    return resumeSavedBooking(page, prompts);
+  }
+  if (!uploadResult) {
     log.warn("Applicant Webfile upload/confirmation did not complete. Guided booking stopped.");
     return;
   }
 
-  const centre = await chooseCentre(page, prompts);
-  if (!centre) {
+  return continueBookingFrom(page, prompts, "mission");
+}
+
+// Pages after the Webfile step. When the portal opens on one of these directly
+// (for example a resumed session that lands on the date picker), the flow skips
+// sign-in and uploads and continues from that page.
+const RESUMABLE_PAGES = new Set(["mission", "waiting", "time-slot", "declaration", "payment", "confirmed"]);
+// Pages where the helper still has work to do (payment and confirmation are the user's).
+const AUTO_RESUME_PAGES = new Set(["mission", "waiting", "time-slot", "declaration"]);
+
+export function isAutoResumePage(key) {
+  return AUTO_RESUME_PAGES.has(key);
+}
+
+// The portal already holds this booking's Webfiles (it refused a re-upload).
+// Open the later booking pages directly and continue from whichever one the
+// portal lets us stay on.
+const SAVED_BOOKING_PATHS = ["/appointment/time-slot", "/appointment/mission"];
+
+export async function resumeSavedBooking(page, prompts) {
+  log.warn("The portal already has these Webfiles from an earlier attempt, so they cannot be uploaded again.");
+  let origin = "https://appointment.ivacbd.com";
+  try {
+    origin = new URL(page.url()).origin;
+  } catch {}
+  for (const savedPath of SAVED_BOOKING_PATHS) {
+    log.step("Resume Booking", `Opening ${savedPath} where the earlier booking was left`);
+    await page.goto(`${origin}${savedPath}`, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
+    await page.waitForTimeout(2_500).catch(() => {});
+    await dismissPortalNotices(page).catch(() => {});
+    const current = await detectPortalPage(page);
+    log.step("Current Page", current.label);
+    if (RESUMABLE_PAGES.has(current.key)) {
+      return continueBookingFrom(page, prompts, current.key);
+    }
+  }
+  log.warn("The portal did not open a later booking step. Its saved Webfiles may need the portal's own reset (for example after a session expiry); check the browser.");
+  return undefined;
+}
+
+async function continueBookingFrom(page, prompts, stage) {
+  if (stage === "confirmed") {
+    log.success("The booking confirmation page is shown. Check the details and download the invoice in the browser.");
+    return;
+  }
+  if (stage === "payment") {
+    log.paymentStop();
     return;
   }
 
-  const date = await chooseDate(page, prompts);
-  if (!date) {
-    return;
+  let centre = "the centre selected earlier";
+  let date = "the date selected earlier";
+  if (stage === "mission") {
+    centre = await chooseCentre(page, prompts);
+    if (!centre) {
+      return;
+    }
   }
+  if (stage === "mission" || stage === "waiting" || stage === "time-slot") {
+    date = await chooseDate(page, prompts);
+    if (!date) {
+      return;
+    }
+    const after = await detectPortalPage(page);
+    log.step("Current Page", after.label);
+    if (after.key === "payment") {
+      log.paymentStop();
+      return;
+    }
+  }
+
   if (!await completeConsentIfNeeded(page, prompts)) {
     return;
   }

@@ -51,6 +51,37 @@ credentials.json
 `
  file stores your contact number and password in plain text and is also excluded from Git. Keep this local file private and delete it yourself when no longer needed.
 
+## Several accounts at once
+
+`credentials.json` can list several accounts by name instead of one:
+
+```json
+{
+  "user1": { "contactNumber": "01XXXXXXXXX", "password": "..." },
+  "user2": { "contactNumber": "01XXXXXXXXX", "password": "..." }
+}
+```
+
+Put each account's Webfiles in its own folder, named exactly like the account: `doc_file/user1/01 ....pdf`, `doc_file/user2/01 ....pdf` (01 is that account's Primary, at most 4 PDFs).
+
+`npm start` then checks which accounts have both a login and a document folder, and opens one separate window per account. Each window has its own browser, login, OTP, log (`logs/<name>/`) and browser profile (`user-data/<name>/`). Accounts with a missing folder or login are skipped with a message.
+
+The windows start 20 seconds apart, because the portal answers many sign-ins at once with "too many requests" (HTTP 429). Change the gap with `IVAC_STAGGER_SECONDS`, for example `$env:IVAC_STAGGER_SECONDS=30; npm start` in PowerShell. Each Chrome window needs memory (roughly 300-500 MB), so 20 accounts need a computer with plenty of RAM.
+
+The original single-account `credentials.json` (`contactNumber` and `password` at the top level, PDFs directly in `doc_file`) still works as before.
+
+## When the portal is busy
+
+The helper waits and retries instead of hammering the server:
+
+- Error, blank, 502/503/504 or network pages are reloaded with growing pauses (5s, 10s, 20s ... up to 60s) for up to 15 minutes; "too many requests" waits 60-120s.
+- After Sign In it waits up to 10 minutes. If nothing happens for 90s it clicks Sign In Now again (at most twice), never while an OTP has been sent.
+- If the portal says the OTP was sent but stays on the Sign in page, the helper opens the OTP page directly.
+- It waits up to 15 minutes for a late OTP and never resends one by itself; a rejected or expired OTP is reported so you can use Resend OTP.
+- If an uploaded PDF does not appear, it reloads the page and reads the portal's applicant count before deciding, so a file is never uploaded twice.
+- If the login expires mid-booking, it signs in again and continues from the step the portal saved.
+- While the helper is open, saving `src/booking.js` reloads the booking code without closing the browser; press `r` to reload and continue.
+
 ## Use
 
 - At startup, the helper clicks **Take Your Appointment** automatically. When it can uniquely identify the sign-in controls, it fills `contactNumber` and `password` from `credentials.json` and clicks **Sign In**. Complete Cloudflare/CAPTCHA and OTP directly in the browser. If the fields cannot be identified safely or the credentials are blank, complete sign-in in the browser yourself. Press Enter at the helper prompt after sign-in. The helper never asks you to type credentials or OTP into its console.

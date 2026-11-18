@@ -57,7 +57,7 @@ const PORTAL_STEPS = [
     key: "centre",
     label: "IVAC Centre selection",
     guidance: "Choose an eligible centre shown for the Mission in the Primary Webfile.",
-    patterns: [/select ivac cent(?:re|er)/i, /ivac cent(?:re|er) selection/i],
+    patterns: [/select (?:your )?ivac cent(?:re|er)/i, /ivac cent(?:re|er) selection/i, /confirm mission (?:&|and) ivac cent(?:re|er)/i],
   },
   {
     key: "webfile",

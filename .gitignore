@@ -1,4 +1,6 @@
 node_modules/
-user-data/
+user-data*/
 profile.json
 npm-debug.log*
+logs/
+booking-preferences*.json

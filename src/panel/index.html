@@ -1,0 +1,2399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IVAC Booking Panel</title>
+<style>
+  :root {
+    --bg: #f1f5f9;
+    --bg-subtle: #e8eef5;
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --ink: #0f172a;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --line-strong: #cbd5e1;
+
+    --brand: #0a6c56;
+    --brand-hover: #085946;
+    --brand-soft: #e6f4f0;
+    --brand-ink: #ffffff;
+
+    --accent: #f26522;
+    --accent-hover: #db5515;
+    --accent-soft: #fff2eb;
+
+    --ok: #15803d;
+    --ok-bg: #dcfce7;
+    --ok-border: #86efac;
+
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --warn-border: #fcd34d;
+
+    --bad: #be123c;
+    --bad-bg: #ffe4e6;
+    --bad-border: #fda4af;
+
+    --info: #1d4ed8;
+    --info-bg: #dbeafe;
+    --info-border: #93c5fd;
+
+    --idle: #475569;
+    --idle-bg: #f1f5f9;
+
+    --code-bg: #0b1120;
+    --code-ink: #cbd5e1;
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, .05);
+    --shadow-md: 0 4px 12px rgba(15, 23, 42, .06), 0 1px 3px rgba(15, 23, 42, .05);
+    --shadow-lg: 0 12px 28px rgba(15, 23, 42, .14);
+    --radius: 14px;
+    --radius-sm: 10px;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0b1118;
+    --bg-subtle: #111923;
+    --surface: #131c27;
+    --surface-2: #192433;
+    --ink: #f1f5f9;
+    --ink-2: #cbd5e1;
+    --muted: #8b9bb0;
+    --line: #233042;
+    --line-strong: #33455e;
+
+    --brand: #1fa887;
+    --brand-hover: #28be9a;
+    --brand-soft: #10322a;
+    --brand-ink: #041510;
+
+    --accent: #ff7a38;
+    --accent-hover: #ff8e54;
+    --accent-soft: #331e12;
+
+    --ok: #4ade80;
+    --ok-bg: #0f2e1d;
+    --ok-border: #1e5b38;
+
+    --warn: #fbbf24;
+    --warn-bg: #33250c;
+    --warn-border: #664912;
+
+    --bad: #fb7185;
+    --bad-bg: #36131c;
+    --bad-border: #6b2033;
+
+    --info: #60a5fa;
+    --info-bg: #132542;
+    --info-border: #25487e;
+
+    --idle: #94a3b8;
+    --idle-bg: #1d2837;
+
+    --code-bg: #070b12;
+    --code-ink: #cbd5e1;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .25);
+    --shadow-md: 0 6px 18px rgba(0, 0, 0, .3);
+    --shadow-lg: 0 16px 36px rgba(0, 0, 0, .5);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Top Header ---------- */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-mark {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    background: linear-gradient(135deg, var(--brand), #054d3d);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    box-shadow: 0 4px 10px color-mix(in srgb, var(--brand) 30%, transparent);
+    flex-shrink: 0;
+  }
+  .brand h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+  .brand-sub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pill-safe {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--brand-soft);
+    color: var(--brand);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .spacer { flex: 1; }
+
+  .conn-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--bad);
+    transition: background .2s;
+  }
+  .dot.on {
+    background: var(--ok);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent);
+  }
+
+  /* ---------- Buttons ---------- */
+  button {
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 7px 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background .15s, border-color .15s, transform .08s, opacity .15s, box-shadow .15s;
+    white-space: nowrap;
+  }
+  button svg { width: 15px; height: 15px; flex-shrink: 0; }
+  button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-2); }
+  button:active:not(:disabled) { transform: translateY(0.5px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: var(--brand-ink);
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
+  button.accent {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  button.accent:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.danger-soft {
+    color: var(--bad);
+    border-color: color-mix(in srgb, var(--bad) 25%, var(--line));
+  }
+  button.danger-soft:hover:not(:disabled) { background: var(--bad-bg); border-color: var(--bad-border); }
+  button.danger-solid {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: #fff;
+    font-weight: 600;
+  }
+  button.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+  }
+  button.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); border-color: transparent; }
+  button.icon-only { padding: 7px; width: 34px; height: 34px; }
+  button.sm { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; }
+  button.xs { padding: 3px 7px; font-size: 11.5px; border-radius: 6px; }
+  button.xs svg { width: 13px; height: 13px; }
+  .btn-count {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .22);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  /* ---------- Page Container & Stats Strip ---------- */
+  .shell {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 18px 24px 48px;
+  }
+  .notice {
+    margin-bottom: 16px;
+    padding: 11px 14px;
+    border-radius: var(--radius-sm);
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn);
+    font-size: 13px;
+    display: none;
+    align-items: center;
+    gap: 10px;
+  }
+  .notice.show { display: flex; }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 13px 16px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: border-color .15s, transform .12s, box-shadow .15s;
+    text-align: left;
+  }
+  .stat-card:hover { border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+  .stat-card.active-filter { border-color: var(--brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 18%, transparent); }
+  .stat-card.highlight-warn { border-color: var(--warn-border); background: color-mix(in srgb, var(--warn-bg) 55%, var(--surface)); }
+  .stat-card.highlight-ok { border-color: var(--ok-border); background: color-mix(in srgb, var(--ok-bg) 55%, var(--surface)); }
+  .stat-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .stat-icon.brand { background: var(--brand-soft); color: var(--brand); }
+  .stat-icon.info { background: var(--info-bg); color: var(--info); }
+  .stat-icon.warn { background: var(--warn-bg); color: var(--warn); }
+  .stat-icon.ok { background: var(--ok-bg); color: var(--ok); }
+  .stat-icon.bad { background: var(--bad-bg); color: var(--bad); }
+  .stat-icon svg { width: 19px; height: 19px; }
+  .stat-val { font-size: 21px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat-lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat-sub { font-size: 11px; color: var(--muted); }
+
+  /* ---------- Main Layout ---------- */
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(340px, 410px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  .sidebar { position: sticky; top: 78px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .card.editing-mode {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent), var(--shadow-md);
+  }
+  .card-hd {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .card-hd h2 { margin: 0; font-size: 14.5px; font-weight: 700; }
+  .card-bd { padding: 16px; }
+
+  .mode-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--brand-soft);
+    color: var(--brand);
+  }
+  .mode-pill.edit { background: var(--warn-bg); color: var(--warn); }
+
+  /* ---------- Form Controls ---------- */
+  .field { margin-bottom: 13px; }
+  .field-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    gap: 8px;
+  }
+  .field label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin: 0;
+  }
+  .field-meta { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .field-meta.ok { color: var(--ok); font-weight: 600; }
+  .field-meta.err { color: var(--bad); font-weight: 600; }
+
+  .input-wrap { position: relative; display: flex; align-items: center; }
+  input[type=text], input[type=password], input[type=tel], input[type=search] {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input[readonly] { background: var(--surface-2); color: var(--muted); cursor: default; }
+  input:focus {
+    outline: none;
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+  }
+  input.has-right-btn { padding-right: 38px; }
+  .input-right-btn {
+    position: absolute;
+    right: 4px;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 7px;
+  }
+  .input-right-btn:hover { background: var(--surface-2); color: var(--ink); }
+
+  .field-help { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+  /* ---------- Multi-PDF Upload & 4-Slot Queue ---------- */
+  .pdf-section {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .pdf-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .pdf-header-left { display: flex; align-items: center; gap: 8px; }
+  .pdf-header h3 { margin: 0; font-size: 13px; font-weight: 700; color: var(--ink); }
+  .pdf-count-pill {
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--idle-bg);
+    color: var(--idle);
+    font-variant-numeric: tabular-nums;
+  }
+  .pdf-count-pill.has { background: var(--brand-soft); color: var(--brand); }
+  .pdf-count-pill.full { background: var(--ok-bg); color: var(--ok); }
+
+  .dropzone {
+    border: 2px dashed var(--line-strong);
+    border-radius: 12px;
+    background: var(--surface-2);
+    padding: 14px 12px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, transform .1s;
+    position: relative;
+  }
+  .dropzone:hover, .dropzone:focus-visible {
+    border-color: var(--brand);
+    background: color-mix(in srgb, var(--brand-soft) 55%, var(--surface));
+    outline: none;
+  }
+  .dropzone.dragover {
+    border-color: var(--brand);
+    background: var(--brand-soft);
+    transform: scale(1.01);
+  }
+  .dropzone.disabled {
+    opacity: .6;
+    cursor: not-allowed;
+    border-style: solid;
+  }
+  .dz-icon {
+    width: 34px;
+    height: 34px;
+    margin: 0 auto 6px;
+    border-radius: 9px;
+    background: var(--brand-soft);
+    color: var(--brand);
+    display: grid;
+    place-items: center;
+  }
+  .dz-icon svg { width: 18px; height: 18px; }
+  .dz-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .dz-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .sr-only-file {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .slot-list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 7px;
+  }
+  .slot-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 9px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    transition: border-color .15s, background .15s, box-shadow .15s;
+  }
+  .slot-item.primary-slot {
+    border-color: color-mix(in srgb, var(--brand) 42%, var(--line));
+    background: color-mix(in srgb, var(--brand-soft) 32%, var(--surface));
+  }
+  .slot-item.invalid-slot {
+    border-color: var(--bad-border);
+    background: color-mix(in srgb, var(--bad-bg) 45%, var(--surface));
+  }
+  .slot-item.dragging { opacity: .45; border-style: dashed; }
+  .slot-item.drag-target { border-color: var(--brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 25%, transparent); }
+
+  .drag-handle {
+    cursor: grab;
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+    padding: 2px;
+    border-radius: 5px;
+  }
+  .drag-handle:hover { color: var(--ink); background: var(--surface-2); }
+  .drag-handle svg { width: 14px; height: 14px; }
+
+  .slot-main { min-width: 0; }
+  .slot-badges { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-bottom: 2px; }
+  .slot-role {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--idle-bg);
+    color: var(--idle);
+    letter-spacing: .01em;
+  }
+  .slot-role.primary { background: var(--brand); color: var(--brand-ink); }
+  .slot-origin {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--info-bg);
+    color: var(--info);
+  }
+  .slot-origin.saved { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+  .slot-size { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .slot-size.err { color: var(--bad); font-weight: 700; }
+  .slot-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .slot-err-text { font-size: 11px; color: var(--bad); font-weight: 600; margin-top: 2px; }
+
+  .slot-actions { display: flex; align-items: center; gap: 3px; }
+  .slot-btn {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink-2);
+  }
+  .slot-btn svg { width: 13px; height: 13px; }
+  .slot-btn.star:hover:not(:disabled) { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+  .slot-btn.del:hover:not(:disabled) { color: var(--bad); border-color: var(--bad-border); background: var(--bad-bg); }
+
+  .add-slot-btn {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1.5px dashed var(--line-strong);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12.5px;
+    font-weight: 500;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+  .add-slot-btn:hover {
+    border-color: var(--brand);
+    color: var(--brand);
+    background: color-mix(in srgb, var(--brand-soft) 45%, transparent);
+  }
+  .add-slot-num {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .add-slot-btn:hover .add-slot-num { border-color: var(--brand); color: var(--brand); }
+
+  .pdf-tip {
+    margin-top: 9px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .pdf-tip b { color: var(--ink-2); }
+
+  .form-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .form-actions .primary { flex: 1; padding: 10px 14px; }
+
+  .msg {
+    margin-top: 10px;
+    padding: 9px 11px;
+    border-radius: 9px;
+    font-size: 12.5px;
+    font-weight: 500;
+    display: none;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .msg.show { display: flex; }
+  .msg.ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); }
+  .msg.err { background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad-border); }
+
+  /* ---------- Accounts Toolbar & List ---------- */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .search-box { position: relative; min-width: 210px; flex: 1; max-width: 310px; }
+  .search-box svg {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 15px;
+    height: 15px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .search-box input { padding: 7px 10px 7px 32px; font-size: 13px; }
+
+  .filter-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .fpill {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--muted);
+  }
+  .fpill.active { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+  .fpill .fc { font-size: 11px; opacity: .82; margin-left: 2px; }
+
+  .stagger-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  .accounts { display: grid; gap: 14px; }
+  .empty-state {
+    background: var(--surface);
+    border: 1.5px dashed var(--line-strong);
+    border-radius: var(--radius);
+    padding: 44px 24px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .empty-state h3 { margin: 10px 0 4px; color: var(--ink); font-size: 15px; }
+  .empty-state p { margin: 0; font-size: 13px; }
+
+  /* ---------- Account Card ---------- */
+  .acct {
+    position: relative;
+    border-left: 4px solid var(--line-strong);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .acct[data-state="running"], .acct[data-state="starting"] { border-left-color: var(--info); }
+  .acct[data-state="scheduled"] { border-left-color: var(--muted); }
+  .acct[data-state="needs-otp"] { border-left-color: var(--warn); box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 22%, transparent), var(--shadow-md); }
+  .acct[data-state="payment"], .acct[data-state="done"] { border-left-color: var(--ok); }
+  .acct[data-state="error"] { border-left-color: var(--bad); }
+
+  .acct .card-hd { background: var(--surface); flex-wrap: wrap; gap: 10px; padding: 13px 16px; }
+  .acct-identity { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+  .acct-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: var(--brand-soft);
+    color: var(--brand);
+    font-weight: 750;
+    font-size: 13px;
+    display: grid;
+    place-items: center;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .acct-title-group { min-width: 0; }
+  .acct-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .acct .name { font-weight: 750; font-size: 15px; letter-spacing: -.01em; }
+  .acct-sub-row { display: flex; align-items: center; gap: 8px; margin-top: 1px; font-size: 12px; color: var(--muted); }
+  .acct .num { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--idle-bg);
+    color: var(--idle);
+  }
+  .badge .bdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge.running, .badge.starting { background: var(--info-bg); color: var(--info); }
+  .badge.running .bdot, .badge.starting .bdot { animation: blink 1.2s ease-in-out infinite; }
+  .badge.scheduled { background: var(--idle-bg); color: var(--idle); }
+  .badge.needs-otp { background: var(--warn-bg); color: var(--warn); }
+  .badge.needs-otp .bdot { animation: blink .8s ease-in-out infinite; }
+  .badge.payment, .badge.done { background: var(--ok-bg); color: var(--ok); }
+  .badge.error { background: var(--bad-bg); color: var(--bad); }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  .acct-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+  /* ---------- Visual Booking Stepper ---------- */
+  .stepper {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+  }
+  .step-node {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .step-circle {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1.5px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  .step-node.done { color: var(--ok); }
+  .step-node.done .step-circle { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .step-node.current { color: var(--ink); font-weight: 700; }
+  .step-node.current .step-circle {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: var(--brand-ink);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
+  }
+  .step-node.current.warn .step-circle {
+    background: var(--warn);
+    border-color: var(--warn);
+    color: #fff;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent);
+  }
+  .step-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- Banners, OTP & Questions ---------- */
+  .banner {
+    margin-bottom: 12px;
+    padding: 11px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .banner[hidden] { display: none; }
+  .banner.ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); }
+  .banner.warn { background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad-border); }
+
+  .otp-box {
+    margin-bottom: 12px;
+    padding: 11px 14px;
+    border-radius: 11px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    transition: all .2s;
+  }
+  .otp-box[hidden] { display: none; }
+  .otp-box.need {
+    border: 2px solid var(--warn);
+    background: var(--warn-bg);
+    animation: otpPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes otpPulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 22%, transparent); } }
+  @media (prefers-reduced-motion: reduce) { .otp-box.need { animation: none; } }
+  .otp-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .otp-top b { font-size: 13px; }
+  .otp-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .otp-input {
+    max-width: 170px !important;
+    letter-spacing: .32em;
+    font-size: 18px !important;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    padding: 7px 10px !important;
+    background: var(--surface) !important;
+  }
+  .otp-hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .otp-box.need .otp-hint { color: var(--warn); }
+
+  .question-box {
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: 11px;
+    background: var(--info-bg);
+    border: 1px solid var(--info-border);
+  }
+  .question-box[hidden] { display: none; }
+  .question-box .q-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--info); margin-bottom: 4px; }
+  .question-box .q { font-weight: 600; font-size: 13.5px; margin-bottom: 9px; white-space: pre-wrap; color: var(--ink); }
+  .question-box .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .question-box input { max-width: 260px; background: var(--surface); }
+
+  /* ---------- Telemetry Grid ---------- */
+  .telemetry {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .kv {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px 11px;
+    background: var(--surface-2);
+    min-width: 0;
+  }
+  .kv .k { font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+  .kv .v { font-weight: 650; font-size: 13px; overflow-wrap: anywhere; color: var(--ink); }
+  .kv .s { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; margin-top: 1px; }
+  .cf-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; }
+  .cf-pill.ok { color: var(--ok); }
+  .cf-pill.warn { color: var(--warn); }
+  .cf-pill.muted { color: var(--muted); font-weight: 500; }
+
+  .latest-bar {
+    margin-top: 10px;
+    padding: 8px 11px;
+    border-radius: 9px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12.5px;
+  }
+  .latest-bar .lbl { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); flex-shrink: 0; }
+  .latest-bar .last { color: var(--ink-2); overflow-wrap: anywhere; }
+
+  /* ---------- Attached Docs & Timeline ---------- */
+  .docs-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 11px;
+  }
+  .doc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    max-width: 100%;
+  }
+  .doc-chip.primary {
+    background: var(--brand-soft);
+    border-color: color-mix(in srgb, var(--brand) 30%, var(--line));
+    color: var(--brand);
+    font-weight: 600;
+  }
+  .doc-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+  .doc-chip-kb { font-size: 10.5px; opacity: .75; font-variant-numeric: tabular-nums; }
+  .doc-missing {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: var(--bad-bg);
+    border: 1px solid var(--bad-border);
+    color: var(--bad);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .timeline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .timeline:empty { display: none; }
+  .t-chip {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .t-chip.current { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); font-weight: 600; }
+
+  /* ---------- Logs ---------- */
+  details.logs {
+    margin-top: 12px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+  details.logs summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  details.logs summary::-webkit-details-marker { display: none; }
+  details.logs summary:hover { color: var(--ink); }
+  .chev { transition: transform .15s; display: inline-flex; }
+  details.logs[open] .chev { transform: rotate(90deg); }
+
+  .log-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .log-toolbar label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; margin: 0; font-weight: 500; }
+  .log-level-select {
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .logbox {
+    margin-top: 8px;
+    max-height: 260px;
+    overflow: auto;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .logbox div { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .logbox .t { color: #64748b; margin-right: 8px; user-select: none; }
+  .logbox .warn { color: #fbbf24; }
+  .logbox .error { color: #fb7185; }
+  .logbox .success { color: #4ade80; }
+  .logbox .step { color: #60a5fa; }
+  .logbox .action { color: #fb923c; }
+  .logbox .journal { color: #7c8ea6; }
+
+  /* ---------- Toasts & Confirm Modal ---------- */
+  .toast-stack {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 100;
+    display: grid;
+    gap: 8px;
+    max-width: 380px;
+    pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--brand);
+    border-radius: 11px;
+    padding: 11px 14px;
+    box-shadow: var(--shadow-lg);
+    font-size: 13px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    animation: toastIn .18s ease-out;
+  }
+  .toast.ok { border-left-color: var(--ok); }
+  .toast.warn { border-left-color: var(--warn); }
+  .toast.err { border-left-color: var(--bad); }
+  .toast-close { margin-left: auto; border: none; background: transparent; color: var(--muted); padding: 0 4px; font-size: 15px; line-height: 1; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(15, 23, 42, .55);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal-box {
+    width: 100%;
+    max-width: 430px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    padding: 20px;
+  }
+  .modal-box h3 { margin: 0 0 8px; font-size: 16px; }
+  .modal-box p { margin: 0 0 18px; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 1180px) {
+    .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .telemetry { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stepper { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { position: static; }
+    .shell { padding: 14px 16px 40px; }
+    .topbar-inner { padding: 10px 16px; }
+  }
+  @media (max-width: 600px) {
+    .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .telemetry { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <div>
+        <h1>IVAC Booking Panel</h1>
+        <div class="brand-sub">
+          <span class="pill-safe">Local Only • 127.0.0.1</span>
+          <span>Stops safely at Payment page</span>
+        </div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <span class="conn-pill" title="Live Server-Sent Events connection">
+      <span class="dot" id="connDot"></span>
+      <span id="connText">Connecting…</span>
+    </span>
+    <button type="button" class="icon-only" id="themeToggle" title="Toggle light / dark theme" aria-label="Toggle theme">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+    <button type="button" class="accent" id="startAll">
+      <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+      <span>Start All</span>
+      <span class="btn-count" id="startAllCount">0</span>
+    </button>
+    <button type="button" id="stopAll" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+      <span>Stop All</span>
+    </button>
+  </div>
+</header>
+
+<div class="shell">
+  <div class="notice" id="legacyNotice"></div>
+
+  <!-- Summary KPI Strip -->
+  <section class="stats-grid" aria-label="Booking overview">
+    <button type="button" class="stat-card active-filter" data-stat-filter="all">
+      <div class="stat-icon brand">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </div>
+      <div>
+        <div class="stat-val" id="statTotal">0</div>
+        <div class="stat-lbl">Total Accounts</div>
+        <div class="stat-sub" id="statPdfs">0 PDFs attached</div>
+      </div>
+    </button>
+    <button type="button" class="stat-card" data-stat-filter="active">
+      <div class="stat-icon info">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+      </div>
+      <div>
+        <div class="stat-val" id="statActive">0</div>
+        <div class="stat-lbl">Running / Active</div>
+        <div class="stat-sub" id="statScheduled">0 scheduled</div>
+      </div>
+    </button>
+    <button type="button" class="stat-card" id="statOtpCard" data-stat-filter="needs-otp">
+      <div class="stat-icon warn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <div>
+        <div class="stat-val" id="statOtp">0</div>
+        <div class="stat-lbl">Needs OTP</div>
+        <div class="stat-sub">Waiting for code</div>
+      </div>
+    </button>
+    <button type="button" class="stat-card" id="statPayCard" data-stat-filter="payment">
+      <div class="stat-icon ok">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      </div>
+      <div>
+        <div class="stat-val" id="statPay">0</div>
+        <div class="stat-lbl">Payment / Done</div>
+        <div class="stat-sub">Ready to pay</div>
+      </div>
+    </button>
+    <button type="button" class="stat-card" data-stat-filter="error">
+      <div class="stat-icon bad">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </div>
+      <div>
+        <div class="stat-val" id="statError">0</div>
+        <div class="stat-lbl">Issues / Errors</div>
+        <div class="stat-sub" id="statIdle">0 idle</div>
+      </div>
+    </button>
+  </section>
+
+  <div class="layout">
+    <!-- Left Sidebar: Account & Multi-PDF Form -->
+    <aside class="sidebar">
+      <section class="card" id="formCard">
+        <div class="card-hd">
+          <h2 id="formTitle">Add Account</h2>
+          <span class="mode-pill" id="formModePill">New</span>
+          <div class="spacer"></div>
+          <button type="button" class="xs ghost" id="formReset" hidden>Cancel Edit</button>
+        </div>
+
+        <form class="card-bd" id="accountForm" autocomplete="off" novalidate>
+          <div class="field">
+            <div class="field-top">
+              <label for="fName">Account Name</label>
+              <span class="field-meta" id="nameMeta">Letters, numbers, - or _</span>
+            </div>
+            <input type="text" id="fName" name="name" placeholder="e.g. user1" required maxlength="40">
+          </div>
+
+          <div class="field">
+            <div class="field-top">
+              <label for="fNumber">IVAC Contact Number</label>
+              <span class="field-meta" id="numMeta">0 / 11 digits</span>
+            </div>
+            <input type="tel" id="fNumber" name="contactNumber" placeholder="01XXXXXXXXX" inputmode="numeric" maxlength="11">
+            <div class="field-help" id="numHelp" hidden></div>
+          </div>
+
+          <div class="field">
+            <div class="field-top">
+              <label for="fPassword">Portal Password</label>
+              <span class="field-meta" id="pwMeta">Required</span>
+            </div>
+            <div class="input-wrap">
+              <input type="password" id="fPassword" name="password" class="has-right-btn" placeholder="Enter IVAC portal password" autocomplete="new-password">
+              <button type="button" class="input-right-btn" id="togglePw" aria-label="Show password" title="Show / hide password">
+                <svg id="pwEyeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Multi-PDF Webfile Upload Manager -->
+          <div class="pdf-section">
+            <div class="pdf-header">
+              <div class="pdf-header-left">
+                <h3>Webfile PDFs</h3>
+                <span class="pdf-count-pill" id="pdfCountPill">0 / 4 PDFs</span>
+              </div>
+              <button type="button" class="xs ghost" id="clearPdfsBtn" hidden>Clear all</button>
+            </div>
+
+            <div class="dropzone" id="pdfDropzone" role="button" tabindex="0" aria-label="Select or drag and drop up to 4 Webfile PDFs">
+              <div class="dz-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </div>
+              <div class="dz-title" id="dzTitle">Click to select PDFs or Drag &amp; Drop here</div>
+              <div class="dz-sub" id="dzSub">Select multiple PDFs at once (Ctrl/Shift + Click) or add one by one • Max 4 PDFs, 500 KB each</div>
+              <input type="file" id="fFiles" class="sr-only-file" accept="application/pdf,.pdf" multiple>
+              <input type="file" id="fReplaceSingle" class="sr-only-file" accept="application/pdf,.pdf">
+            </div>
+
+            <ul class="slot-list" id="fileList"></ul>
+
+            <div class="pdf-tip">
+              <b>Upload Order:</b> Slot <b>01</b> is the <b>Primary Applicant</b> (account holder). Slots <b>02–04</b> are Co-Applicants. Drag rows or use <b>↑ ↓</b> / <b>★</b> to set Primary.
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="primary" type="submit" id="saveBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              <span id="saveBtnText">Save Account</span>
+            </button>
+          </div>
+          <div class="msg" id="formMsg" role="status"></div>
+        </form>
+      </section>
+    </aside>
+
+    <!-- Right Main Workspace: Accounts -->
+    <main>
+      <div class="toolbar">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" id="searchInput" placeholder="Search account, number, or PDF…">
+        </div>
+        <div class="filter-pills" id="filterPills">
+          <button type="button" class="fpill active" data-filter="all">All <span class="fc" id="fcAll">0</span></button>
+          <button type="button" class="fpill" data-filter="active">Active <span class="fc" id="fcActive">0</span></button>
+          <button type="button" class="fpill" data-filter="needs-otp">Needs OTP <span class="fc" id="fcOtp">0</span></button>
+          <button type="button" class="fpill" data-filter="payment">Payment <span class="fc" id="fcPay">0</span></button>
+          <button type="button" class="fpill" data-filter="idle">Idle <span class="fc" id="fcIdle">0</span></button>
+          <button type="button" class="fpill" data-filter="error">Errors <span class="fc" id="fcError">0</span></button>
+        </div>
+        <div class="spacer"></div>
+        <span class="stagger-chip" id="staggerHint"></span>
+      </div>
+
+      <div class="accounts" id="accounts">
+        <div class="empty-state" id="emptyState">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="opacity:.5"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+          <h3>No accounts added yet</h3>
+          <p>Use the form on the left to add your IVAC account credentials and up to 4 Webfile PDFs.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Account Card Template -->
+<template id="accountTpl">
+  <article class="card acct" data-state="ready">
+    <div class="card-hd">
+      <div class="acct-identity">
+        <div class="acct-avatar"></div>
+        <div class="acct-title-group">
+          <div class="acct-name-row">
+            <span class="name"></span>
+            <span class="badge"><span class="bdot"></span><span class="badge-text"></span></span>
+          </div>
+          <div class="acct-sub-row">
+            <span class="num"></span>
+            <span>•</span>
+            <span class="docCountText"></span>
+          </div>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="acct-actions">
+        <button type="button" class="sm primary" data-act="start">
+          <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          <span>Start</span>
+        </button>
+        <button type="button" class="sm danger-soft" data-act="stop">
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+          <span>Stop</span>
+        </button>
+        <button type="button" class="sm" data-act="resume" title="Continue booking from the currently open page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <span>Resume</span>
+        </button>
+        <button type="button" class="sm" data-act="reload" title="Reload booking code without closing this browser">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          <span>Reload</span>
+        </button>
+        <button type="button" class="sm" data-act="edit" title="Edit account details and PDFs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          <span>Edit</span>
+        </button>
+        <button type="button" class="sm danger-soft" data-act="delete" title="Remove account">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="card-bd">
+      <!-- 6-Stage Booking Stepper -->
+      <div class="stepper" aria-label="Booking progress">
+        <div class="step-node" data-stage="login"><span class="step-circle">1</span><span class="step-lbl">Sign In</span></div>
+        <div class="step-node" data-stage="otp"><span class="step-circle">2</span><span class="step-lbl">OTP</span></div>
+        <div class="step-node" data-stage="webfile"><span class="step-circle">3</span><span class="step-lbl">Webfiles</span></div>
+        <div class="step-node" data-stage="centre"><span class="step-circle">4</span><span class="step-lbl">Centre/Slot</span></div>
+        <div class="step-node" data-stage="confirm"><span class="step-circle">5</span><span class="step-lbl">Confirm</span></div>
+        <div class="step-node" data-stage="payment"><span class="step-circle">6</span><span class="step-lbl">Payment</span></div>
+      </div>
+
+      <!-- Status Banner (Payment / Done / Error) -->
+      <div class="banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="xs banner-action" hidden>View Logs</button>
+      </div>
+
+      <!-- OTP Entry Panel (Shown when active or needs OTP) -->
+      <div class="otp-box" hidden>
+        <div class="otp-top">
+          <b>SMS OTP Verification</b>
+          <span class="mode-pill otpStatus"></span>
+        </div>
+        <div class="otp-controls">
+          <input type="text" class="otp-input" inputmode="numeric" maxlength="8" placeholder="••••••" aria-label="OTP code">
+          <button type="button" class="primary sm otpSend">Send OTP to Portal</button>
+        </div>
+        <div class="otp-hint">Enter the 6-digit SMS code here (or paste it) — it fills and verifies automatically. Resend unlocks after 2 minutes.</div>
+      </div>
+
+      <!-- Interactive Prompt Question -->
+      <div class="question-box" hidden>
+        <div class="q-title">Input Required</div>
+        <div class="q"></div>
+        <div class="row">
+          <input type="text" class="qInput" placeholder="Type your answer…">
+          <button type="button" class="sm primary qSend">Submit Answer</button>
+        </div>
+      </div>
+
+      <!-- Live Telemetry Tiles -->
+      <div class="telemetry">
+        <div class="kv"><div class="k">Current Page</div><div class="v page">—</div><div class="s path"></div></div>
+        <div class="kv"><div class="k">Current Step</div><div class="v step">—</div><div class="s detail"></div></div>
+        <div class="kv"><div class="k">Cloudflare</div><div class="v cf"></div><div class="s buttons"></div></div>
+        <div class="kv"><div class="k">Session Time</div><div class="v elapsed">—</div><div class="s started"></div></div>
+      </div>
+
+      <div class="latest-bar">
+        <span class="lbl">Latest</span>
+        <span class="last">No activity yet.</span>
+      </div>
+
+      <!-- Attached Webfiles -->
+      <div class="docs-strip docs"></div>
+
+      <!-- Visited Pages Trail -->
+      <div class="timeline"></div>
+
+      <!-- Collapsible Activity Log -->
+      <details class="logs">
+        <summary>
+          <span class="chev">▸</span>
+          <span>Activity Log (<span class="logCount">0</span>)</span>
+        </summary>
+        <div class="log-toolbar">
+          <select class="log-level-select fLevel" aria-label="Filter logs">
+            <option value="all">All levels</option>
+            <option value="important">Steps &amp; Alerts</option>
+            <option value="errors">Warnings &amp; Errors</option>
+          </select>
+          <label><input type="checkbox" class="fJournal"> Page journal</label>
+          <label><input type="checkbox" class="fFollow" checked> Auto-scroll</label>
+          <div class="spacer"></div>
+          <button type="button" class="xs copyLogsBtn">Copy logs</button>
+        </div>
+        <div class="logbox"></div>
+      </details>
+    </div>
+  </article>
+</template>
+
+<!-- Confirmation Modal -->
+<div class="modal-backdrop" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal-box">
+    <h3 id="modalTitle">Confirm Action</h3>
+    <p id="modalDesc"></p>
+    <div class="modal-actions">
+      <button type="button" id="modalCancel">Cancel</button>
+      <button type="button" class="danger-solid" id="modalConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+<script>
+(() => {
+  const MAX_FILES = 4;
+  const MAX_PDF_BYTES = 500 * 1024;
+  const STATE_LABELS = {
+    ready: "Ready",
+    idle: "Waiting — Press Resume",
+    scheduled: "Scheduled",
+    starting: "Starting…",
+    running: "Running",
+    "needs-otp": "Needs OTP",
+    payment: "Payment Ready",
+    done: "Confirmed",
+    stopped: "Stopped",
+    error: "Error",
+  };
+  const STAGES = ["login", "otp", "webfile", "centre", "confirm", "payment"];
+
+  const accounts = new Map();
+  const cards = new Map();
+  const logs = new Map();
+  let staggerSeconds = 20;
+  let activeFilter = "all";
+  let searchQuery = "";
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const fmtDuration = (ms) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return h > 0
+      ? `${h}h ${String(m).padStart(2, "0")}m ${String(sec).padStart(2, "0")}s`
+      : `${String(m).padStart(2, "0")}m ${String(sec).padStart(2, "0")}s`;
+  };
+
+  // ---------- Theme ----------
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("ivac-panel-theme", theme);
+    $("#themeIcon").innerHTML = theme === "dark"
+      ? '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'
+      : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+  }
+  const savedTheme = localStorage.getItem("ivac-panel-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  applyTheme(savedTheme);
+  $("#themeToggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+
+  // ---------- Toasts & Modal ----------
+  function toast(message, type = "info", durationMs = 4200) {
+    const el = document.createElement("div");
+    el.className = `toast ${type}`;
+    el.innerHTML = `<span>${esc(message)}</span><button type="button" class="toast-close" aria-label="Dismiss">×</button>`;
+    const remove = () => el.remove();
+    el.querySelector(".toast-close").onclick = remove;
+    $("#toastStack").appendChild(el);
+    if (durationMs > 0) setTimeout(remove, durationMs);
+  }
+
+  let modalResolve = null;
+  function confirmDialog({ title, desc, confirmText = "Confirm", danger = true }) {
+    $("#modalTitle").textContent = title;
+    $("#modalDesc").textContent = desc;
+    const btn = $("#modalConfirm");
+    btn.textContent = confirmText;
+    btn.className = danger ? "danger-solid" : "primary";
+    $("#confirmModal").classList.add("open");
+    btn.focus();
+    return new Promise((resolve) => { modalResolve = resolve; });
+  }
+  function closeModal(result) {
+    $("#confirmModal").classList.remove("open");
+    if (modalResolve) { const fn = modalResolve; modalResolve = null; fn(result); }
+  }
+  $("#modalCancel").onclick = () => closeModal(false);
+  $("#modalConfirm").onclick = () => closeModal(true);
+  $("#confirmModal").addEventListener("click", (e) => { if (e.target === $("#confirmModal")) closeModal(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#confirmModal").classList.contains("open")) closeModal(false); });
+
+  // ---------- API ----------
+  async function api(method, url, body) {
+    const options = { method, headers: { "x-ivac-panel": "1" } };
+    if (body instanceof FormData) options.body = body;
+    else if (body !== undefined) { options.body = JSON.stringify(body); options.headers["content-type"] = "application/json"; }
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
+    if (!data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+  }
+
+  // ---------- Account Form & Multi-PDF Slot Manager ----------
+  // Each item: { kind: "existing", file, sizeKB } OR { kind: "new", file: File, name, sizeKB, tooBig }
+  let docItems = [];
+  let editing = null;
+  let replaceIndex = null;
+  let dragFromIndex = null;
+
+  const form = $("#accountForm");
+  const fileList = $("#fileList");
+  const fFiles = $("#fFiles");
+  const fReplaceSingle = $("#fReplaceSingle");
+  const dropzone = $("#pdfDropzone");
+
+  function showFormMsg(text, ok) {
+    const box = $("#formMsg");
+    box.textContent = text;
+    box.className = `msg show ${ok ? "ok" : "err"}`;
+  }
+  function clearFormMsg() {
+    $("#formMsg").className = "msg";
+    $("#formMsg").textContent = "";
+  }
+
+  function validateInputsLive() {
+    const nameVal = $("#fName").value.trim();
+    const nameMeta = $("#nameMeta");
+    if (!nameVal) {
+      nameMeta.textContent = "Letters, numbers, - or _";
+      nameMeta.className = "field-meta";
+    } else if (/^[A-Za-z0-9][A-Za-z0-9 _-]{0,39}$/.test(nameVal)) {
+      nameMeta.textContent = "Valid name";
+      nameMeta.className = "field-meta ok";
+    } else {
+      nameMeta.textContent = "Invalid characters";
+      nameMeta.className = "field-meta err";
+    }
+
+    const numVal = $("#fNumber").value.replace(/\s+/g, "");
+    const numMeta = $("#numMeta");
+    if (!numVal && editing) {
+      numMeta.textContent = "Keeping current";
+      numMeta.className = "field-meta";
+    } else if (/^01\d{9}$/.test(numVal)) {
+      numMeta.textContent = "11 / 11 digits ✓";
+      numMeta.className = "field-meta ok";
+    } else {
+      numMeta.textContent = `${numVal.length} / 11 digits`;
+      numMeta.className = numVal.length > 0 && !numVal.startsWith("01") ? "field-meta err" : "field-meta";
+    }
+  }
+
+  $("#fName").addEventListener("input", validateInputsLive);
+  $("#fNumber").addEventListener("input", (e) => {
+    e.target.value = e.target.value.replace(/[^\d]/g, "").slice(0, 11);
+    validateInputsLive();
+  });
+
+  $("#togglePw").onclick = () => {
+    const pw = $("#fPassword");
+    const show = pw.type === "password";
+    pw.type = show ? "text" : "password";
+    $("#pwEyeIcon").innerHTML = show
+      ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+      : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  };
+
+  function isPdfFile(file) {
+    return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name));
+  }
+
+  function addPdfFiles(incomingList) {
+    const incoming = Array.from(incomingList || []);
+    if (!incoming.length) return;
+    let added = 0;
+    let skippedNonPdf = 0;
+    let skippedDup = 0;
+    let skippedLimit = 0;
+
+    for (const file of incoming) {
+      if (!isPdfFile(file)) {
+        skippedNonPdf += 1;
+        continue;
+      }
+      if (docItems.length >= MAX_FILES) {
+        skippedLimit += 1;
+        continue;
+      }
+      const norm = file.name.trim().toLowerCase();
+      const dup = docItems.some((item) => (item.kind === "existing" ? item.file : item.name).trim().toLowerCase() === norm);
+      if (dup) {
+        skippedDup += 1;
+        continue;
+      }
+      docItems.push({
+        kind: "new",
+        file,
+        name: file.name,
+        sizeKB: Math.ceil(file.size / 1024),
+        tooBig: file.size > MAX_PDF_BYTES,
+      });
+      added += 1;
+    }
+
+    if (skippedNonPdf) toast(`${skippedNonPdf} non-PDF file(s) ignored. Only PDF files are accepted.`, "err");
+    if (skippedDup) toast(`${skippedDup} duplicate file(s) already in the list.`, "warn");
+    if (skippedLimit) toast(`Maximum ${MAX_FILES} PDFs allowed per account. ${skippedLimit} extra file(s) skipped.`, "warn");
+    if (added && docItems.some((d) => d.tooBig)) toast("One or more PDFs exceed the 500 KB IVAC portal limit.", "err");
+
+    clearFormMsg();
+    renderFiles();
+  }
+
+  function replaceSinglePdf(index, file) {
+    if (!file) return;
+    if (!isPdfFile(file)) {
+      toast(`${file.name} is not a PDF file.`, "err");
+      return;
+    }
+    docItems[index] = {
+      kind: "new",
+      file,
+      name: file.name,
+      sizeKB: Math.ceil(file.size / 1024),
+      tooBig: file.size > MAX_PDF_BYTES,
+    };
+    if (file.size > MAX_PDF_BYTES) toast(`${file.name} exceeds 500 KB limit.`, "err");
+    renderFiles();
+  }
+
+  function moveDoc(from, to) {
+    if (to < 0 || to >= docItems.length || from === to) return;
+    const [item] = docItems.splice(from, 1);
+    docItems.splice(to, 0, item);
+    renderFiles();
+  }
+
+  function renderFiles() {
+    fileList.innerHTML = "";
+    const count = docItems.length;
+    const pill = $("#pdfCountPill");
+    pill.textContent = `${count} / ${MAX_FILES} PDFs`;
+    pill.className = `pdf-count-pill ${count === MAX_FILES ? "full" : count > 0 ? "has" : ""}`;
+    $("#clearPdfsBtn").hidden = count === 0;
+
+    dropzone.classList.toggle("disabled", count >= MAX_FILES);
+    if (count >= MAX_FILES) {
+      $("#dzTitle").textContent = "All 4 applicant PDF slots filled";
+      $("#dzSub").textContent = "Remove or replace a slot below to change a PDF";
+    } else if (count === 0) {
+      $("#dzTitle").textContent = "Click to select PDFs or Drag & Drop here";
+      $("#dzSub").textContent = "Select 1 to 4 PDFs at once (Ctrl/Shift + Click) or add one by one • Max 500 KB each";
+    } else {
+      const left = MAX_FILES - count;
+      $("#dzTitle").textContent = `Add more PDFs (${left} slot${left > 1 ? "s" : ""} remaining)`;
+      $("#dzSub").textContent = "Click or drag & drop additional Co-Applicant PDFs here";
+    }
+
+    docItems.forEach((item, index) => {
+      const li = document.createElement("li");
+      const name = item.kind === "existing" ? item.file : item.name;
+      const isPrimary = index === 0;
+      const tooBig = Boolean(item.tooBig || item.sizeKB > 500);
+      li.className = `slot-item ${isPrimary ? "primary-slot" : ""} ${tooBig ? "invalid-slot" : ""}`;
+      li.draggable = docItems.length > 1;
+      li.innerHTML = `
+        <div class="drag-handle" title="Drag to reorder">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+        </div>
+        <div class="slot-main">
+          <div class="slot-badges">
+            <span class="slot-role ${isPrimary ? "primary" : ""}">${isPrimary ? "01 • Primary" : `0${index + 1} • Co-Applicant`}</span>
+            <span class="slot-origin ${item.kind === "existing" ? "saved" : ""}">${item.kind === "existing" ? "Saved" : "New"}</span>
+            <span class="slot-size ${tooBig ? "err" : ""}">${item.sizeKB} KB${tooBig ? " (Max 500 KB!)" : ""}</span>
+          </div>
+          <div class="slot-name" title="${esc(name)}">${esc(name)}</div>
+        </div>
+        <div class="slot-actions">
+          ${!isPrimary ? `<button type="button" class="slot-btn star" data-primary title="Make Primary Applicant (Slot 01)" aria-label="Make Primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>` : ""}
+          <button type="button" class="slot-btn" data-up ${index === 0 ? "disabled" : ""} title="Move up" aria-label="Move up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="18 15 12 9 6 15"/></svg></button>
+          <button type="button" class="slot-btn" data-down ${index === count - 1 ? "disabled" : ""} title="Move down" aria-label="Move down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <button type="button" class="slot-btn" data-swap title="Replace this PDF" aria-label="Replace PDF"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
+          <button type="button" class="slot-btn del" data-remove title="Remove PDF" aria-label="Remove PDF"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+      `;
+
+      const starBtn = li.querySelector("[data-primary]");
+      if (starBtn) starBtn.onclick = () => moveDoc(index, 0);
+      li.querySelector("[data-up]").onclick = () => moveDoc(index, index - 1);
+      li.querySelector("[data-down]").onclick = () => moveDoc(index, index + 1);
+      li.querySelector("[data-swap]").onclick = () => { replaceIndex = index; fReplaceSingle.click(); };
+      li.querySelector("[data-remove]").onclick = () => { docItems.splice(index, 1); renderFiles(); };
+
+      // Drag-and-drop reorder
+      li.addEventListener("dragstart", (e) => {
+        dragFromIndex = index;
+        li.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+      });
+      li.addEventListener("dragend", () => {
+        dragFromIndex = null;
+        li.classList.remove("dragging");
+        fileList.querySelectorAll(".drag-target").forEach((n) => n.classList.remove("drag-target"));
+      });
+      li.addEventListener("dragover", (e) => {
+        if (dragFromIndex === null || dragFromIndex === index) return;
+        e.preventDefault();
+        li.classList.add("drag-target");
+      });
+      li.addEventListener("dragleave", () => li.classList.remove("drag-target"));
+      li.addEventListener("drop", (e) => {
+        if (dragFromIndex === null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        li.classList.remove("drag-target");
+        moveDoc(dragFromIndex, index);
+        dragFromIndex = null;
+      });
+
+      fileList.appendChild(li);
+    });
+
+    // Show clickable "+ Add Applicant 0X PDF" slot right below filled slots!
+    if (count < MAX_FILES) {
+      const nextNum = count + 1;
+      const li = document.createElement("li");
+      li.innerHTML = `
+        <button type="button" class="add-slot-btn" id="addNextSlotBtn">
+          <span class="add-slot-num">0${nextNum}</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>${nextNum === 1 ? "Add Primary Applicant PDF (Required)" : `Add Co-Applicant 0${nextNum} PDF (Optional)`}</span>
+        </button>
+      `;
+      li.querySelector("button").onclick = () => fFiles.click();
+      fileList.appendChild(li);
+    }
+  }
+
+  dropzone.addEventListener("click", () => { if (docItems.length < MAX_FILES) fFiles.click(); });
+  dropzone.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && docItems.length < MAX_FILES) {
+      e.preventDefault();
+      fFiles.click();
+    }
+  });
+  dropzone.addEventListener("dragover", (e) => {
+    if (dragFromIndex !== null || docItems.length >= MAX_FILES) return;
+    e.preventDefault();
+    dropzone.classList.add("dragover");
+  });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+  dropzone.addEventListener("drop", (e) => {
+    dropzone.classList.remove("dragover");
+    if (dragFromIndex !== null) return;
+    e.preventDefault();
+    addPdfFiles(e.dataTransfer?.files);
+  });
+
+  fFiles.addEventListener("change", (e) => {
+    addPdfFiles(e.target.files);
+    e.target.value = "";
+  });
+  fReplaceSingle.addEventListener("change", (e) => {
+    if (replaceIndex !== null && e.target.files?.[0]) replaceSinglePdf(replaceIndex, e.target.files[0]);
+    replaceIndex = null;
+    e.target.value = "";
+  });
+  $("#clearPdfsBtn").onclick = () => {
+    docItems = [];
+    renderFiles();
+  };
+
+  function suggestNextAccountName() {
+    let n = 1;
+    while (accounts.has(`user${n}`)) n += 1;
+    return `user${n}`;
+  }
+
+  function resetForm() {
+    editing = null;
+    form.reset();
+    docItems = [];
+    renderFiles();
+    $("#formCard").classList.remove("editing-mode");
+    $("#fName").readOnly = false;
+    $("#fName").placeholder = `e.g. ${suggestNextAccountName()}`;
+    $("#fNumber").placeholder = "01XXXXXXXXX";
+    $("#numHelp").hidden = true;
+    $("#fPassword").type = "password";
+    $("#fPassword").placeholder = "Enter IVAC portal password";
+    $("#pwMeta").textContent = "Required";
+    $("#formTitle").textContent = "Add Account";
+    $("#formModePill").textContent = "New";
+    $("#formModePill").className = "mode-pill";
+    $("#saveBtnText").textContent = "Save Account";
+    $("#formReset").hidden = true;
+    validateInputsLive();
+  }
+  $("#formReset").onclick = () => { resetForm(); clearFormMsg(); };
+
+  function editAccount(name) {
+    const account = accounts.get(name);
+    if (!account) return;
+    editing = name;
+    clearFormMsg();
+    $("#formCard").classList.add("editing-mode");
+    $("#fName").value = name;
+    $("#fName").readOnly = true;
+    $("#fNumber").value = "";
+    $("#fNumber").placeholder = "Leave empty to keep current";
+    $("#numHelp").hidden = false;
+    $("#numHelp").textContent = `Current saved number: ${account.contact}`;
+    $("#fPassword").value = "";
+    $("#fPassword").type = "password";
+    $("#fPassword").placeholder = "Leave empty to keep current password";
+    $("#pwMeta").textContent = "Optional on edit";
+
+    // Pre-populate ALL existing saved PDFs so user can add, reorder, swap, or remove individually!
+    docItems = (account.docs || []).map((doc) => ({
+      kind: "existing",
+      file: doc.file,
+      sizeKB: doc.sizeKB,
+      tooBig: doc.sizeKB > 500,
+    }));
+    renderFiles();
+
+    $("#formTitle").textContent = `Edit ${name}`;
+    $("#formModePill").textContent = "Editing";
+    $("#formModePill").className = "mode-pill edit";
+    $("#saveBtnText").textContent = "Update Account";
+    $("#formReset").hidden = false;
+    validateInputsLive();
+    $("#formCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    $("#fNumber").focus();
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearFormMsg();
+
+    const name = $("#fName").value.trim();
+    const num = $("#fNumber").value.replace(/\s+/g, "");
+    const pw = $("#fPassword").value;
+
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _-]{0,39}$/.test(name)) {
+      return showFormMsg("Account name must be 1–40 letters, numbers, spaces, - or _ (e.g. user1).", false);
+    }
+    if ((!editing || num) && !/^01\d{9}$/.test(num)) {
+      return showFormMsg("Contact number must be 11 digits starting with 01.", false);
+    }
+    if (!editing && !pw.trim()) {
+      return showFormMsg("Portal password is required for a new account.", false);
+    }
+    if (docItems.length === 0) {
+      return showFormMsg("Add at least 1 Webfile PDF (Slot 01 is the Primary Applicant).", false);
+    }
+    const oversized = docItems.find((d) => d.tooBig || d.sizeKB > 500);
+    if (oversized) {
+      const fn = oversized.kind === "existing" ? oversized.file : oversized.name;
+      return showFormMsg(`${fn} is ${oversized.sizeKB} KB — IVAC portal accepts max 500 KB per PDF.`, false);
+    }
+
+    const data = new FormData();
+    data.append("name", name);
+    data.append("contactNumber", num);
+    data.append("password", pw);
+
+    const docOrder = [];
+    let newIdx = 0;
+    for (const item of docItems) {
+      if (item.kind === "existing") {
+        docOrder.push({ kind: "existing", file: item.file });
+      } else {
+        data.append("files", item.file, item.name);
+        docOrder.push({ kind: "new", index: newIdx });
+        newIdx += 1;
+      }
+    }
+    data.append("docOrder", JSON.stringify(docOrder));
+
+    $("#saveBtn").disabled = true;
+    try {
+      const wasEditing = Boolean(editing);
+      const result = await api("POST", "/api/accounts", data);
+      upsertAccount(result.account);
+      resetForm();
+      const summary = `${result.account.name} ${wasEditing ? "updated" : "saved"} with ${result.account.docs.length} PDF(s).`;
+      showFormMsg(summary, true);
+      toast(summary, "ok");
+    } catch (error) {
+      showFormMsg(error.message, false);
+      toast(error.message, "err");
+    } finally {
+      $("#saveBtn").disabled = false;
+    }
+  });
+
+  // ---------- Stage Progress Helper ----------
+  function mapPageKeyToStage(key) {
+    if (!key) return -1;
+    const k = String(key).toLowerCase();
+    if (k.includes("payment") || k.includes("confirmed") || k.includes("done")) return 5;
+    if (k.includes("declaration") || k.includes("consent") || k.includes("confirm")) return 4;
+    if (k.includes("mission") || k.includes("centre") || k.includes("center") || k.includes("slot") || k.includes("waiting") || k.includes("date")) return 3;
+    if (k.includes("webfile") || k.includes("upload") || k.includes("guide") || k.includes("dashboard")) return 2;
+    if (k.includes("otp")) return 1;
+    if (k.includes("login") || k.includes("signin")) return 0;
+    return -1;
+  }
+
+  function updateStepper(node, a) {
+    let currentIdx = -1;
+    if (a.state === "done") currentIdx = 6;
+    else if (a.state === "payment") currentIdx = 5;
+    else if (a.needsOtp) currentIdx = 1;
+    else if (a.page?.key) currentIdx = mapPageKeyToStage(a.page.key);
+
+    // Also inspect page history so earlier steps stay marked completed
+    let maxSeen = currentIdx;
+    for (const p of (a.pages || [])) {
+      const idx = mapPageKeyToStage(p.key);
+      if (idx > maxSeen) maxSeen = idx;
+    }
+    const effective = Math.max(currentIdx, maxSeen);
+
+    node.querySelectorAll(".step-node").forEach((el, idx) => {
+      el.classList.remove("done", "current", "warn");
+      const circle = el.querySelector(".step-circle");
+      if (a.state === "done" || idx < effective) {
+        el.classList.add("done");
+        circle.textContent = "✓";
+      } else if (idx === effective && (a.active || a.state === "payment")) {
+        el.classList.add("current");
+        if (a.needsOtp && idx === 1) el.classList.add("warn");
+        circle.textContent = String(idx + 1);
+      } else {
+        circle.textContent = String(idx + 1);
+      }
+    });
+  }
+
+  // ---------- Summary & Filters ----------
+  function matchesFilter(a, filter) {
+    if (filter === "all") return true;
+    if (filter === "active") return a.active;
+    if (filter === "needs-otp") return a.state === "needs-otp" || a.needsOtp;
+    if (filter === "payment") return a.state === "payment" || a.state === "done";
+    if (filter === "idle") return !a.active && a.state !== "payment" && a.state !== "done" && a.state !== "error";
+    if (filter === "error") return a.state === "error";
+    return true;
+  }
+
+  function matchesSearch(a, q) {
+    if (!q) return true;
+    const hay = [
+      a.name,
+      a.contact,
+      a.step,
+      a.page?.label,
+      ...(a.docs || []).map((d) => d.file),
+    ].join(" ").toLowerCase();
+    return hay.includes(q);
+  }
+
+  function updateSummaryAndVisibility() {
+    let total = 0, totalPdfs = 0, active = 0, scheduled = 0, otp = 0, pay = 0, err = 0, idle = 0, startable = 0;
+    for (const a of accounts.values()) {
+      total += 1;
+      totalPdfs += (a.docs || []).length;
+      if (a.active) active += 1;
+      if (a.state === "scheduled") scheduled += 1;
+      if (a.state === "needs-otp" || a.needsOtp) otp += 1;
+      if (a.state === "payment" || a.state === "done") pay += 1;
+      if (a.state === "error") err += 1;
+      if (!a.active && a.state !== "payment" && a.state !== "done" && a.state !== "error") idle += 1;
+      if (!a.active && (a.docs || []).length > 0) startable += 1;
+    }
+
+    $("#statTotal").textContent = String(total);
+    $("#statPdfs").textContent = `${totalPdfs} PDF${totalPdfs === 1 ? "" : "s"} attached`;
+    $("#statActive").textContent = String(active);
+    $("#statScheduled").textContent = `${scheduled} scheduled`;
+    $("#statOtp").textContent = String(otp);
+    $("#statPay").textContent = String(pay);
+    $("#statError").textContent = String(err);
+    $("#statIdle").textContent = `${idle} idle`;
+
+    $("#statOtpCard").classList.toggle("highlight-warn", otp > 0);
+    $("#statPayCard").classList.toggle("highlight-ok", pay > 0);
+
+    $("#fcAll").textContent = String(total);
+    $("#fcActive").textContent = String(active);
+    $("#fcOtp").textContent = String(otp);
+    $("#fcPay").textContent = String(pay);
+    $("#fcIdle").textContent = String(idle);
+    $("#fcError").textContent = String(err);
+
+    $("#startAllCount").textContent = String(startable);
+    $("#startAll").disabled = startable === 0;
+    $("#stopAll").disabled = active === 0;
+
+    let visibleCount = 0;
+    const q = searchQuery.trim().toLowerCase();
+    for (const [name, node] of cards.entries()) {
+      const a = accounts.get(name);
+      const show = a && matchesFilter(a, activeFilter) && matchesSearch(a, q);
+      node.hidden = !show;
+      if (show) visibleCount += 1;
+    }
+
+    const empty = $("#emptyState");
+    if (total === 0) {
+      empty.hidden = false;
+      empty.querySelector("h3").textContent = "No accounts added yet";
+      empty.querySelector("p").textContent = "Use the form on the left to add your IVAC account credentials and up to 4 Webfile PDFs.";
+    } else if (visibleCount === 0) {
+      empty.hidden = false;
+      empty.querySelector("h3").textContent = "No matching accounts";
+      empty.querySelector("p").textContent = "Try clearing your search or switching the status filter above.";
+    } else {
+      empty.hidden = true;
+    }
+  }
+
+  function setFilter(next) {
+    activeFilter = next;
+    document.querySelectorAll(".fpill").forEach((b) => b.classList.toggle("active", b.dataset.filter === next));
+    document.querySelectorAll(".stat-card").forEach((c) => c.classList.toggle("active-filter", c.dataset.statFilter === next));
+    updateSummaryAndVisibility();
+  }
+  document.querySelectorAll(".fpill").forEach((b) => b.addEventListener("click", () => setFilter(b.dataset.filter)));
+  document.querySelectorAll(".stat-card").forEach((c) => c.addEventListener("click", () => setFilter(c.dataset.statFilter)));
+  $("#searchInput").addEventListener("input", (e) => { searchQuery = e.target.value; updateSummaryAndVisibility(); });
+
+  // ---------- Accounts Rendering ----------
+  function upsertAccount(account) {
+    accounts.set(account.name, { ...(accounts.get(account.name) || {}), ...account });
+    if (account.logs) logs.set(account.name, account.logs);
+    render(account.name);
+    updateSummaryAndVisibility();
+    if (!editing) $("#fName").placeholder = `e.g. ${suggestNextAccountName()}`;
+  }
+
+  function ensureCard(name) {
+    if (cards.has(name)) return cards.get(name);
+    const node = $("#accountTpl").content.firstElementChild.cloneNode(true);
+    node.querySelectorAll("[data-act]").forEach((btn) => btn.addEventListener("click", () => act(name, btn.dataset.act)));
+    $(".otpSend", node).onclick = () => sendOtp(name);
+    $(".otp-input", node).addEventListener("keydown", (e) => { if (e.key === "Enter") sendOtp(name); });
+    $(".otp-input", node).addEventListener("input", (e) => { e.target.value = e.target.value.replace(/\D/g, "").slice(0, 8); });
+    $(".qSend", node).onclick = () => answer(name);
+    $(".qInput", node).addEventListener("keydown", (e) => { if (e.key === "Enter") answer(name); });
+    $(".fJournal", node).onchange = () => renderLogs(name, true);
+    $(".fLevel", node).onchange = () => renderLogs(name, true);
+    $(".copyLogsBtn", node).onclick = async () => {
+      const entries = getVisibleLogs(name);
+      const text = entries.map((e) => `[${fmtTime(e.time)}] [${e.level}] ${e.text}`).join("\n");
+      try {
+        await navigator.clipboard.writeText(text || "(No logs)");
+        toast(`Copied ${entries.length} log line(s) for ${name}.`, "ok", 2500);
+      } catch {
+        toast("Could not access clipboard.", "err");
+      }
+    };
+    $(".banner-action", node).onclick = () => {
+      const det = $("details.logs", node);
+      det.open = true;
+      det.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+
+    $("#accounts").appendChild(node);
+    cards.set(name, node);
+    return node;
+  }
+
+  function render(name) {
+    const a = accounts.get(name);
+    if (!a) return;
+    const node = ensureCard(name);
+    node.dataset.state = a.state;
+
+    $(".acct-avatar", node).textContent = name.slice(0, 2);
+    $(".name", node).textContent = name;
+    $(".num", node).textContent = a.contact;
+    $(".docCountText", node).textContent = `${a.docs.length} PDF${a.docs.length === 1 ? "" : "s"}`;
+
+    const badge = $(".badge", node);
+    badge.className = `badge ${a.state}`;
+    const badgeText = a.state === "scheduled" && a.startsAt
+      ? `Starts in ${Math.max(0, Math.ceil((a.startsAt - Date.now()) / 1000))}s`
+      : (STATE_LABELS[a.state] || a.state);
+    $(".badge-text", badge).textContent = badgeText;
+
+    const active = a.active;
+    node.querySelector("[data-act=start]").disabled = active || !a.docs.length;
+    node.querySelector("[data-act=stop]").disabled = !active;
+    node.querySelector("[data-act=resume]").disabled = !active || a.state === "scheduled";
+    node.querySelector("[data-act=reload]").disabled = !active || a.state === "scheduled";
+    node.querySelector("[data-act=edit]").disabled = active;
+    node.querySelector("[data-act=delete]").disabled = active;
+
+    updateStepper(node, a);
+
+    $(".page", node).textContent = a.page ? a.page.label : "—";
+    $(".path", node).textContent = a.page ? `${a.page.path || "/"}${a.page.tab > 1 ? ` • tab ${a.page.tab}` : ""}` : "Not open";
+    $(".step", node).textContent = a.step || "—";
+    $(".detail", node).textContent = a.detail || "Idle";
+
+    const cf = a.page && a.page.turnstile;
+    const cfEl = $(".cf", node);
+    if (!cf || !cf.present) cfEl.innerHTML = `<span class="cf-pill muted">Not on page</span>`;
+    else if (cf.solved) cfEl.innerHTML = `<span class="cf-pill ok">✓ Passed</span>`;
+    else if (cf.onScreen) cfEl.innerHTML = `<span class="cf-pill warn">● Checking (click if asked)</span>`;
+    else cfEl.innerHTML = `<span class="cf-pill warn">↓ Below fold</span>`;
+    $(".buttons", node).textContent = a.page?.buttons?.length ? `Controls: ${a.page.buttons.slice(0, 3).join(", ")}` : "";
+
+    $(".elapsed", node).textContent = a.active && a.startedAt ? fmtDuration(Date.now() - a.startedAt) : "—";
+    $(".started", node).textContent = a.startedAt ? `Started ${fmtTime(a.startedAt)}` : "Not started";
+    $(".last", node).textContent = a.lastMessage || "No activity yet.";
+
+    const banner = $(".banner", node);
+    const bannerBtn = $(".banner-action", node);
+    if (a.state === "payment") {
+      banner.hidden = false;
+      banner.className = "banner ok";
+      $(".banner-text", banner).textContent = "Payment page reached! Complete payment now in this account's browser (~10 min window).";
+      bannerBtn.hidden = true;
+    } else if (a.state === "done") {
+      banner.hidden = false;
+      banner.className = "banner ok";
+      $(".banner-text", banner).textContent = "Booking confirmed! Download the appointment slip / invoice in the browser.";
+      bannerBtn.hidden = true;
+    } else if (a.state === "error") {
+      banner.hidden = false;
+      banner.className = "banner warn";
+      $(".banner-text", banner).textContent = `Booking process stopped with an error (exit code ${a.exitCode}).`;
+      bannerBtn.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+
+    // Smart OTP visibility: show when running/needs-otp; highlight strongly when needsOtp!
+    const otpBox = $(".otp-box", node);
+    const showOtp = Boolean(a.needsOtp) || (active && a.state !== "scheduled");
+    otpBox.hidden = !showOtp;
+    otpBox.classList.toggle("need", Boolean(a.needsOtp));
+    const otpBadge = $(".otpStatus", node);
+    otpBadge.textContent = a.needsOtp ? "Portal waiting for OTP" : (a.otpStatus || "Standby");
+    otpBadge.className = `mode-pill otpStatus ${a.needsOtp ? "edit" : ""}`;
+    $(".otpSend", node).disabled = !active;
+
+    const q = $(".question-box", node);
+    if (a.question) {
+      q.hidden = false;
+      if ($(".q", q).textContent !== a.question.text) {
+        $(".q", q).textContent = a.question.text;
+        $(".qInput", q).value = "";
+      }
+      q.dataset.id = a.question.id;
+    } else {
+      q.hidden = true;
+    }
+
+    const docsEl = $(".docs", node);
+    if (a.docs.length) {
+      docsEl.innerHTML = a.docs.map((doc, idx) => `
+        <span class="doc-chip ${doc.primary ? "primary" : ""}" title="${esc(doc.file)}">
+          <span>${doc.primary ? "★ 01 Primary" : `0${idx + 1}`}</span>
+          <span class="doc-chip-name">${esc(doc.file.replace(/^\d{2}\s+/, ""))}</span>
+          <span class="doc-chip-kb">${doc.sizeKB} KB</span>
+        </span>
+      `).join("");
+    } else {
+      docsEl.innerHTML = `
+        <span class="doc-missing">
+          <span>No Webfile PDFs attached</span>
+          <button type="button" class="xs primary" data-quick-add>Add PDFs</button>
+        </span>
+      `;
+      docsEl.querySelector("[data-quick-add]").onclick = () => editAccount(name);
+    }
+
+    const pages = a.pages || [];
+    $(".timeline", node).innerHTML = pages
+      .map((p, i) => `<span class="t-chip ${i === pages.length - 1 ? "current" : ""}" title="${esc(p.path)} at ${fmtTime(p.time)}">${esc(p.label)}</span>`)
+      .join(" → ");
+
+    renderLogs(name, false);
+  }
+
+  function getVisibleLogs(name) {
+    const node = cards.get(name);
+    const entries = logs.get(name) || [];
+    if (!node) return entries;
+    const showJournal = $(".fJournal", node).checked;
+    const level = $(".fLevel", node).value;
+    return entries.filter((entry) => {
+      if (!showJournal && entry.level === "journal") return false;
+      if (level === "important") return ["step", "action", "warn", "error", "success"].includes(entry.level);
+      if (level === "errors") return ["warn", "error"].includes(entry.level);
+      return true;
+    });
+  }
+
+  function renderLogs(name, full) {
+    const node = cards.get(name);
+    if (!node) return;
+    const visible = getVisibleLogs(name);
+    const box = $(".logbox", node);
+    $(".logCount", node).textContent = String(visible.length);
+    if (full || box.childElementCount !== visible.length) {
+      box.innerHTML = visible.slice(-300).map((entry) =>
+        `<div class="${esc(entry.level)}"><span class="t">${fmtTime(entry.time)}</span>${esc(entry.text)}</div>`
+      ).join("");
+      if ($(".fFollow", node).checked) box.scrollTop = box.scrollHeight;
+    }
+  }
+
+  // ---------- Actions ----------
+  async function act(name, action) {
+    try {
+      if (action === "edit") return editAccount(name);
+      if (action === "delete") {
+        const ok = await confirmDialog({
+          title: `Delete "${name}"?`,
+          desc: `Its login will be removed from credentials.json and its PDFs will be safely archived to doc_file/_removed.`,
+          confirmText: "Delete Account",
+          danger: true,
+        });
+        if (!ok) return;
+        await api("DELETE", `/api/accounts/${encodeURIComponent(name)}`);
+        if (editing === name) resetForm();
+        toast(`Account "${name}" removed.`, "info");
+        return;
+      }
+      await api("POST", `/api/accounts/${encodeURIComponent(name)}/${action}`);
+      if (action === "start") toast(`Starting ${name}…`, "info", 2600);
+      else if (action === "stop") toast(`Stopping ${name}…`, "warn", 2600);
+      else if (action === "resume") toast(`Resume signal sent to ${name}.`, "info", 2600);
+      else if (action === "reload") toast(`Reloaded booking code for ${name}.`, "ok", 2600);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  }
+
+  async function sendOtp(name) {
+    const node = cards.get(name);
+    const input = $(".otp-input", node);
+    const code = input.value.replace(/\D/g, "");
+    if (code.length < 4) {
+      toast("Enter the OTP digits (usually 6 digits).", "warn");
+      input.focus();
+      return;
+    }
+    try {
+      await api("POST", `/api/accounts/${encodeURIComponent(name)}/otp`, { code });
+      input.value = "";
+      toast(`OTP sent to ${name}.`, "ok", 3000);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  }
+
+  async function answer(name) {
+    const node = cards.get(name);
+    const q = $(".question-box", node);
+    try {
+      await api("POST", `/api/accounts/${encodeURIComponent(name)}/answer`, {
+        id: Number(q.dataset.id),
+        text: $(".qInput", q).value,
+      });
+      toast(`Answer sent to ${name}.`, "ok", 2500);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  }
+
+  $("#startAll").onclick = async () => {
+    try {
+      const result = await api("POST", "/api/start-all");
+      if (result.started.length) {
+        toast(`Started ${result.started.length} account(s): ${result.started.join(", ")}.`, "ok", 4500);
+      }
+      if (result.skipped.length) {
+        toast(`Skipped: ${result.skipped.join(", ")}`, "warn", 5000);
+      }
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
+  $("#stopAll").onclick = async () => {
+    const ok = await confirmDialog({
+      title: "Stop all running accounts?",
+      desc: "This will close every active browser window and cancel any scheduled starts.",
+      confirmText: "Stop All",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api("POST", "/api/stop-all");
+      toast("Stop signal sent to all active accounts.", "warn");
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  };
+
+  // ---------- Live SSE State ----------
+  async function loadState() {
+    const state = await fetch("/api/state").then((r) => r.json());
+    staggerSeconds = state.staggerSeconds;
+    $("#staggerHint").textContent = `Start All gap: ${staggerSeconds}s between accounts`;
+    $("#startAll").title = `Starts eligible accounts ${staggerSeconds}s apart to prevent portal rate-limiting`;
+    const notice = $("#legacyNotice");
+    if (state.legacy) {
+      notice.className = "notice show";
+      notice.textContent = `credentials.json has a single unnamed account (${state.legacy.contact}). Saving an account converts it to "account1" and moves PDFs into doc_file/account1 (backup saved as credentials.single-backup.json).`;
+    } else {
+      notice.className = "notice";
+    }
+    for (const account of state.accounts) upsertAccount(account);
+    updateSummaryAndVisibility();
+    if (!editing) $("#fName").placeholder = `e.g. ${suggestNextAccountName()}`;
+  }
+
+  function connect() {
+    const source = new EventSource("/api/events");
+    source.onopen = () => {
+      $("#connDot").classList.add("on");
+      $("#connText").textContent = "Live";
+      loadState().catch(() => {});
+    };
+    source.onerror = () => {
+      $("#connDot").classList.remove("on");
+      $("#connText").textContent = "Reconnecting…";
+    };
+    source.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === "account") upsertAccount(message.account);
+      else if (message.type === "log") {
+        const list = logs.get(message.name) || [];
+        list.push(message.entry);
+        if (list.length > 400) list.splice(0, list.length - 400);
+        logs.set(message.name, list);
+        renderLogs(message.name, false);
+      } else if (message.type === "removed") {
+        accounts.delete(message.name);
+        cards.get(message.name)?.remove();
+        cards.delete(message.name);
+        updateSummaryAndVisibility();
+      }
+    };
+  }
+
+  setInterval(() => {
+    for (const [name, a] of accounts) {
+      const node = cards.get(name);
+      if (!node) continue;
+      if (a.active && a.startedAt) $(".elapsed", node).textContent = fmtDuration(Date.now() - a.startedAt);
+      if (a.state === "scheduled") render(name);
+    }
+  }, 1000);
+
+  renderFiles();
+  validateInputsLive();
+  loadState().catch(() => {});
+  connect();
+})();
+</script>
+</body>
+</html>
