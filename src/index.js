@@ -476,8 +476,15 @@ async function main() {
 
   const context = await chromium.launchPersistentContext(BROWSER_DATA_PATH, {
     channel: "chrome",
-    headless: false,
-    args: ["--disable-quic"],
+    headless: true,
+    viewport: null,
+    args: [
+      "--headless=new", // এটিই আসল হেডেড ব্রাউজারের মতো আচরণ করাবে
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--window-size=1920,1080", // হেডলেসে স্ক্রিন সাইজ 0x0 হওয়া আটকাবে
+    ],
   });
 
   await context.addInitScript(() => {
