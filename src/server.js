@@ -326,6 +326,7 @@ function handleRunnerMessage(runner, message) {
       break;
     }
     case "need-otp":
+      if (!runner.needsOtp) runner.otpSince = Date.now();
       runner.needsOtp = true;
       runner.otpStatus = message.rejected ? `rejected: ${message.rejected}` : "waiting";
       runner.state = "needs-otp";
@@ -755,6 +756,8 @@ async function accountView(name, { includeLogs = false } = {}) {
     detail: runner.detail,
     lastMessage: runner.lastMessage,
     needsOtp: runner.needsOtp,
+    // When this account started waiting for its OTP (for the panel's OTP bar).
+    otpSince: runner.needsOtp ? runner.otpSince || null : null,
     otpStatus: runner.otpStatus,
     question: runner.question,
     exitCode: runner.exitCode,

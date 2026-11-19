@@ -1331,6 +1331,11 @@
 </header>
 
 <div class="shell">
+  <!-- Which accounts are waiting for an OTP, and which phone number it went to -->
+  <div id="otpBar" hidden style="position:sticky;top:0;z-index:20;margin:0 0 12px;padding:10px 14px;border-radius:12px;background:#fff4e0;color:#7a4300;border:2px solid #f0a020;font-weight:600">
+    <div style="margin-bottom:6px">📱 OTP needed — check these phones:</div>
+    <div id="otpBarList" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+  </div>
   <div class="notice" id="legacyNotice"></div>
 
   <!-- Summary KPI Strip -->
@@ -1635,6 +1640,7 @@
       <div class="otp-box" hidden>
         <div class="otp-top">
           <b>SMS OTP Verification</b>
+          <span class="otpFor" style="font-weight:700"></span>
           <span class="mode-pill otpStatus"></span>
         </div>
         <div class="otp-controls">
@@ -2366,10 +2372,35 @@
   $("#searchInput").addEventListener("input", (e) => { searchQuery = e.target.value; updateSummaryAndVisibility(); });
 
   // ---------- Accounts Rendering ----------
+  // Top bar: every account waiting for an OTP, the number the SMS went to and
+  // how long ago; clicking an entry jumps to that account's OTP box.
+  function renderOtpBar() {
+    const waiting = [...accounts.values()].filter((a) => a.needsOtp).sort((x, y) => (x.otpSince || 0) - (y.otpSince || 0));
+    const bar = document.getElementById("otpBar");
+    if (!bar) return;
+    bar.hidden = waiting.length === 0;
+    document.getElementById("otpBarList").innerHTML = waiting.map((a) => {
+      const ago = a.otpSince ? fmtDuration(Date.now() - a.otpSince) : "";
+      return `<button type="button" data-otp-jump="${esc(a.name)}" style="font:inherit;font-weight:700;cursor:pointer;border:1px solid #f0a020;background:#fff;color:#14202b;border-radius:999px;padding:5px 12px">${esc(a.name)} → ${esc(a.contact)}${ago ? ` <span style="font-weight:500;color:#7a4300">· ${ago}</span>` : ""}</button>`;
+    }).join("");
+    document.querySelectorAll("[data-otp-jump]").forEach((button) => {
+      button.onclick = () => {
+        const node = cards.get(button.dataset.otpJump);
+        if (!node) return;
+        node.scrollIntoView({ behavior: "smooth", block: "center" });
+        node.querySelector(".otp-input")?.focus();
+      };
+    });
+  }
+
   function upsertAccount(account) {
     accounts.set(account.name, { ...(accounts.get(account.name) || {}), ...account });
     if (account.logs) logs.set(account.name, account.logs);
     render(account.name);
+    const card = cards.get(account.name);
+    const otpFor = card && card.querySelector(".otpFor");
+    if (otpFor) otpFor.textContent = `for ${account.name} → ${accounts.get(account.name).contact}`;
+    renderOtpBar();
     updateSummaryAndVisibility();
     if (!editing) $("#fName").placeholder = `e.g. ${suggestNextAccountName()}`;
   }
@@ -3047,6 +3078,7 @@
   }
 
   setInterval(() => {
+    renderOtpBar();
     if (systemState.circuitBreaker?.state === "open" && systemState.circuitBreaker?.cooldownUntil) {
       renderSystemStatus();
     }

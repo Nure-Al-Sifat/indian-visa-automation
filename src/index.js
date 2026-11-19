@@ -630,6 +630,40 @@ async function main() {
     log.info("Lightweight asset blocking enabled (images, fonts, media & trackers skipped).");
   }
 
+  // Label every portal page with the account it belongs to and the number the
+  // OTP SMS goes to, so with several browsers open it is clear which phone to
+  // check. The label ignores the mouse and never covers the portal's controls.
+  if (credentials) {
+    const number = String(credentials.contactNumber || "");
+    await context.addInitScript(({ account, maskedNumber }) => {
+      const prefix = `[${account}] `;
+      const keepTitle = () => {
+        if (document.title && !document.title.startsWith(prefix)) document.title = prefix + document.title.replace(/^\[[^\]]*\]\s*/, "");
+      };
+      const addLabel = () => {
+        if (!document.documentElement || document.getElementById("ivac-account-label")) return;
+        const label = document.createElement("div");
+        label.id = "ivac-account-label";
+        label.textContent = `${account} • OTP goes to ${maskedNumber}`;
+        label.setAttribute("aria-hidden", "true");
+        label.style.cssText = [
+          "position:fixed", "left:12px", "bottom:12px", "z-index:2147483647", "pointer-events:none",
+          "background:#14202b", "color:#fff", "font:600 15px/1.2 system-ui,Segoe UI,sans-serif",
+          "padding:8px 14px", "border-radius:999px", "box-shadow:0 2px 10px rgba(0,0,0,.35)",
+          "border:2px solid #ff671f", "letter-spacing:.01em",
+        ].join(";");
+        document.documentElement.appendChild(label);
+      };
+      const refresh = () => { keepTitle(); addLabel(); };
+      new MutationObserver(refresh).observe(document, { childList: true, subtree: true, characterData: true });
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", refresh);
+      refresh();
+    }, {
+      account: ACTIVE_USER || "account",
+      maskedNumber: number.length >= 5 ? `${number.slice(0, 3)}${"•".repeat(number.length - 5)}${number.slice(-2)}` : "•••",
+    });
+  }
+
   await context.addInitScript(() => {
     const unblock = () => {
       const allow = (e) => e.stopImmediatePropagation();
